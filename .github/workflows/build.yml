@@ -44,7 +44,6 @@ jobs:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ inputs.upstream_ref }}
           path: vendor/librime
-          submodules: recursive
 
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
@@ -64,6 +63,16 @@ jobs:
           PACKAGING_VERSION: ${{ inputs.packaging_version }}
         run: scripts/build-one-arch.sh ${{ matrix.arch }}
 
+      - name: Resolve source metadata
+        run: |
+          scripts/resolve-version.sh --env >> "${GITHUB_ENV}"
+          scripts/resolve-version.sh --env > "out/${{ matrix.platform }}/source.env"
+        env:
+          UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          PACKAGING_VERSION: ${{ inputs.packaging_version }}
+
       - name: Upload slice
         uses: actions/upload-artifact@v4
         with:
@@ -78,14 +87,6 @@ jobs:
       - name: Checkout packaging repository
         uses: actions/checkout@v4
 
-      - name: Checkout upstream librime
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ inputs.upstream_repo }}
-          ref: ${{ inputs.upstream_ref }}
-          path: vendor/librime
-          submodules: recursive
-
       - name: Download arm64 slice
         uses: actions/download-artifact@v4
         with:
@@ -97,6 +98,9 @@ jobs:
         with:
           name: macos-x86_64
           path: out/macos-x86_64
+
+      - name: Import source metadata
+        run: grep -E '^(UPSTREAM_VERSION|UPSTREAM_COMMIT)=' out/macos-arm64/source.env >> "${GITHUB_ENV}"
 
       - name: Resolve packaging version
         run: |
@@ -110,7 +114,6 @@ jobs:
 
       - name: Package XCFramework
         env:
-          UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: scripts/package-xcframework.sh

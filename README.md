@@ -2,7 +2,7 @@
 
 This repository packages upstream `librime` as a static macOS XCFramework for Xcode and SwiftPM consumers.
 
-The wrapper repository owns build, packaging, and release automation only. Upstream source changes should remain in `patches/` or in a selectable upstream ref. The local reference source is expected at `../librime`; CI checks out source into `vendor/librime`.
+The wrapper repository owns build, packaging, and release automation only. Upstream source changes should remain in `patches/` or in a selectable upstream ref. The local reference source is expected at `../librime`; CI build jobs check out source into `vendor/librime` without submodules.
 
 ## Source Input
 
@@ -68,6 +68,7 @@ dist/
 
 - Build `librime` as a static library with `BUILD_SHARED_LIBS=OFF`.
 - Build third-party dependencies through the wrapper repository's `vcpkg.json` and static macOS triplets.
+- Do not fetch upstream submodules in CI; vcpkg owns third-party dependency resolution for distribution builds.
 - Set up CMake and Ninja in CI with `lukka/get-cmake` so tool downloads can reuse GitHub Actions cache.
 - Keep the vcpkg baseline in `vcpkg.json` so `lukka/run-vcpkg` and Dependabot share one source of truth.
 - Set up vcpkg in CI with `lukka/run-vcpkg` so vcpkg binary caching can reuse built ports through GitHub Actions cache.
