@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   VCPKG_BASELINE: e93bf5796351d422408a2e3ebf88dce98151ae45
@@ -48,15 +49,12 @@ jobs:
           path: vendor/librime
           submodules: recursive
 
-      - name: Checkout vcpkg
-        uses: actions/checkout@v4
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
         with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_BASELINE }}
-          path: vcpkg
-
-      - name: Bootstrap vcpkg
-        run: ./vcpkg/bootstrap-vcpkg.sh
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_BASELINE }}
+          vcpkgJsonGlob: "vcpkg.json"
 
       - name: Install build tools
         run: brew install cmake ninja

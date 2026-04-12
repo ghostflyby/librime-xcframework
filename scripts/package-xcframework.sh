@@ -13,6 +13,9 @@ arm64_lib="${out_dir}/macos-arm64/lib/librime.a"
 arm64_headers="${out_dir}/macos-arm64/include"
 x86_64_lib="${out_dir}/macos-x86_64/lib/librime.a"
 x86_64_headers="${out_dir}/macos-x86_64/include"
+universal_dir="${out_dir}/macos-universal"
+universal_lib="${universal_dir}/lib/librime.a"
+universal_headers="${universal_dir}/include"
 
 for path in "${arm64_lib}" "${arm64_headers}" "${x86_64_lib}" "${x86_64_headers}"; do
   if [[ ! -e "${path}" ]]; then
@@ -21,14 +24,16 @@ for path in "${arm64_lib}" "${arm64_headers}" "${x86_64_lib}" "${x86_64_headers}
   fi
 done
 
-rm -rf "${xcframework_path}" "${zip_path}" "${checksum_path}"
+rm -rf "${xcframework_path}" "${zip_path}" "${checksum_path}" "${universal_dir}"
 mkdir -p "${dist_dir}"
+mkdir -p "${universal_dir}/lib"
+
+rsync -a --delete "${arm64_headers}/" "${universal_headers}/"
+lipo -create "${arm64_lib}" "${x86_64_lib}" -output "${universal_lib}"
 
 xcodebuild -create-xcframework \
-  -library "${arm64_lib}" \
-  -headers "${arm64_headers}" \
-  -library "${x86_64_lib}" \
-  -headers "${x86_64_headers}" \
+  -library "${universal_lib}" \
+  -headers "${universal_headers}" \
   -output "${xcframework_path}"
 
 (

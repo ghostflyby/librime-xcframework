@@ -54,6 +54,9 @@ out/
   macos-x86_64/
     lib/librime.a
     include/
+  macos-universal/
+    lib/librime.a
+    include/
 dist/
   librime.xcframework/
   librime.xcframework.zip
@@ -65,8 +68,10 @@ dist/
 
 - Build `librime` as a static library with `BUILD_SHARED_LIBS=OFF`.
 - Build third-party dependencies through the wrapper repository's `vcpkg.json` and static macOS triplets.
+- Set up vcpkg in CI with `lukka/run-vcpkg` so vcpkg binary caching can reuse built ports through GitHub Actions cache.
 - Use upstream's existing `BUILD_STATIC=ON` CMake path, so CI can build unmodified public upstream refs.
 - Merge vcpkg dependency archives into the distributed `librime.a` with `libtool -static`, so consumers link a single archive.
+- Merge the per-architecture macOS archives into one universal static library before creating the XCFramework.
 - Export only the public C API headers plus `RimeShim.h` and `module.modulemap`.
 
 ## Versioning
