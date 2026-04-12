@@ -56,8 +56,8 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_BASELINE }}
           vcpkgJsonGlob: "vcpkg.json"
 
-      - name: Install build tools
-        run: brew install cmake ninja
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
 
       - name: Build slice
         env:
