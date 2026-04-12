@@ -36,10 +36,10 @@ jobs:
             platform: macos-arm64
     steps:
       - name: Checkout packaging repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Checkout upstream librime
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ inputs.upstream_ref }}
@@ -85,7 +85,7 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout packaging repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download arm64 slice
         uses: actions/download-artifact@v8
