@@ -1,0 +1,9 @@
+.build/
+dist/
+out/
+vendor/
+vcpkg/
+*.xcframework
+*.xcframework.zip
+*.sha256
+

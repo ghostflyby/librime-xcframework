@@ -1,0 +1,44 @@
+name: check-upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: Upstream librime repository.
+        required: true
+        default: rime/librime
+      packaging_revision:
+        description: Packaging revision suffix.
+        required: true
+        default: "1"
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check latest upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || 'rime/librime' }}
+          PACKAGING_REVISION: ${{ inputs.packaging_revision || '1' }}
+        run: |
+          latest_tag="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
+          upstream_version="${latest_tag#v}"
+          package_tag="upstream-${upstream_version}+pack.${PACKAGING_REVISION}"
+
+          if gh release view "${package_tag}" >/dev/null 2>&1; then
+            echo "already published: ${package_tag}"
+            exit 0
+          fi
+
+          gh workflow run build.yml \
+            -f upstream_repo="${UPSTREAM_REPO}" \
+            -f upstream_ref="${latest_tag}" \
+            -f packaging_version="${package_tag}"

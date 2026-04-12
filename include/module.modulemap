@@ -1,0 +1,5 @@
+module Rime {
+  umbrella header "RimeShim.h"
+  export *
+}
+
