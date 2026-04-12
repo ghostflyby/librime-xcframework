@@ -91,6 +91,7 @@ cmake -S "${source_work_dir}" -B "${build_dir}" -G Ninja \
   -DVCPKG_TARGET_TRIPLET="${triplet}" \
   -DVCPKG_OVERLAY_TRIPLETS="${repo_root}/triplets" \
   -DVCPKG_MANIFEST_DIR="${repo_root}" \
+  -DVCPKG_INSTALL_OPTIONS=--allow-unsupported \
   -DCMAKE_INSTALL_PREFIX="${install_dir}" \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_STATIC=ON \
