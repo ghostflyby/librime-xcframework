@@ -69,6 +69,7 @@ dist/
 - Build `librime` as a static library with `BUILD_SHARED_LIBS=OFF`.
 - Build third-party dependencies through the wrapper repository's `vcpkg.json` and static macOS triplets.
 - Set up CMake and Ninja in CI with `lukka/get-cmake` so tool downloads can reuse GitHub Actions cache.
+- Keep the vcpkg baseline in `vcpkg.json` so `lukka/run-vcpkg` and Dependabot share one source of truth.
 - Set up vcpkg in CI with `lukka/run-vcpkg` so vcpkg binary caching can reuse built ports through GitHub Actions cache.
 - Use upstream's existing `BUILD_STATIC=ON` CMake path, so CI can build unmodified public upstream refs.
 - Merge vcpkg dependency archives into the distributed `librime.a` with `libtool -static`, so consumers link a single archive.

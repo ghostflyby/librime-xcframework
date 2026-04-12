@@ -20,9 +20,6 @@ permissions:
   contents: write
   actions: write
 
-env:
-  VCPKG_BASELINE: e93bf5796351d422408a2e3ebf88dce98151ae45
-
 jobs:
   build-slice:
     name: build ${{ matrix.arch }}
@@ -53,7 +50,6 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: ${{ github.workspace }}/vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_BASELINE }}
           vcpkgJsonGlob: "vcpkg.json"
 
       - name: Setup CMake and Ninja
