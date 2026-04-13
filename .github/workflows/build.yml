@@ -28,6 +28,10 @@ jobs:
   build-slice:
     name: build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    env:
+      VCPKG_BINARY_CACHE_DIR: ${{ github.workspace }}/.vcpkg-binary-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-binary-cache
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +58,14 @@ jobs:
             ref="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
           fi
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('vcpkg.json', 'triplets/*.cmake') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Checkout upstream librime
         uses: actions/checkout@v6

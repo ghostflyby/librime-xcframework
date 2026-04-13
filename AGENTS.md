@@ -16,6 +16,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Use this repository's `vcpkg.json` and custom triplets for third-party dependencies.
 - Set up CMake and Ninja in CI with `lukka/get-cmake`.
 - Set up vcpkg in CI with `lukka/run-vcpkg`.
+- Use vcpkg's `files` binary cache source with `actions/cache`; do not rely on the removed `x-gha` backend.
 - Keep the vcpkg `builtin-baseline` only in `vcpkg.json`. Do not duplicate it in workflow environment variables.
 - Let Dependabot update the vcpkg baseline and GitHub Actions versions.
 - Do not require consumers to link librime's internal third-party dependencies manually.
