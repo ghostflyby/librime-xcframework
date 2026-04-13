@@ -19,7 +19,8 @@ import PackageDescription
 let package = Package(
     name: "Librime",
     platforms: [
-        .macOS(.v11)
+        .macOS(.v11),
+        .iOS(.v13)
     ],
     products: [
         .library(name: "Rime", targets: ["Rime"]),

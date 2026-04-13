@@ -23,10 +23,11 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 
 ## Packaging
 
-- Build `librime` as both static and dynamic libraries.
+- Build `librime` as a static library for macOS and iOS, and as a dynamic library for macOS.
 - Use upstream's existing `BUILD_STATIC=ON` CMake path.
 - Merge vcpkg static dependency archives into each per-architecture `librime.a`.
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.
+- Build iOS device arm64 and combine iOS simulator arm64 and x86_64 archives into a universal simulator static library before creating the static XCFramework.
 - Combine macOS arm64 and x86_64 dylibs into one universal macOS dynamic library before creating the dynamic XCFramework.
 - Export only the public C API headers and module shim.
 - Release artifacts should include `librime.xcframework.zip`, `librime-dynamic.xcframework.zip`, and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.

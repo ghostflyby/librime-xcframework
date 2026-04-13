@@ -2,22 +2,59 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  printf 'usage: %s <arm64|x86_64>\n' "$0" >&2
+  printf 'usage: %s <macos-arm64|macos-x86_64|ios-arm64|ios-simulator-arm64|ios-simulator-x86_64>\n' "$0" >&2
   exit 2
 fi
 
-arch="$1"
-case "${arch}" in
-  arm64)
+slice="$1"
+case "${slice}" in
+  arm64|macos-arm64)
+    arch="arm64"
     platform="macos-arm64"
     triplet="arm64-osx-static-release"
+    deployment_target="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
+    cmake_system_name=""
+    osx_sysroot=""
+    build_dynamic=1
     ;;
-  x86_64)
+  x86_64|macos-x86_64)
+    arch="x86_64"
     platform="macos-x86_64"
     triplet="x64-osx-static-release"
+    deployment_target="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
+    cmake_system_name=""
+    osx_sysroot=""
+    build_dynamic=1
+    ;;
+  ios-arm64)
+    arch="arm64"
+    platform="ios-arm64"
+    triplet="arm64-ios-static-release"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    cmake_system_name="iOS"
+    osx_sysroot="iphoneos"
+    build_dynamic=0
+    ;;
+  ios-simulator-arm64)
+    arch="arm64"
+    platform="ios-simulator-arm64"
+    triplet="arm64-ios-simulator-static-release"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    cmake_system_name="iOS"
+    osx_sysroot="iphonesimulator"
+    build_dynamic=0
+    ;;
+  ios-simulator-x86_64)
+    arch="x86_64"
+    platform="ios-simulator-x86_64"
+    triplet="x64-ios-simulator-static-release"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    cmake_system_name="iOS"
+    osx_sysroot="iphonesimulator"
+    build_dynamic=0
     ;;
   *)
-    printf 'unsupported architecture: %s\n' "${arch}" >&2
+    printf 'unsupported slice: %s\n' "${slice}" >&2
     exit 2
     ;;
 esac
@@ -25,15 +62,14 @@ esac
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 work_dir="${WORK_DIR:-${repo_root}/.build}"
-build_dir="${work_dir}/build-${arch}"
+build_dir="${work_dir}/build-${platform}"
 static_build_dir="${build_dir}-static"
 dynamic_build_dir="${build_dir}-dynamic"
-source_work_dir="${work_dir}/src-${arch}"
+source_work_dir="${work_dir}/src-${platform}"
 install_dir="${OUT_DIR:-${repo_root}/out}/${platform}"
 static_install_dir="${install_dir}/static"
 dynamic_install_dir="${install_dir}/dynamic"
 configuration="${CONFIGURATION:-Release}"
-deployment_target="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
 export VCPKG_OSX_DEPLOYMENT_TARGET="${VCPKG_OSX_DEPLOYMENT_TARGET:-${deployment_target}}"
 
 source_dir="${UPSTREAM_SOURCE_DIR:-}"
@@ -110,6 +146,14 @@ configure_common=(
   -DENABLE_EXTERNAL_PLUGINS=OFF
 )
 
+if [[ -n "${cmake_system_name}" ]]; then
+  configure_common+=(-DCMAKE_SYSTEM_NAME="${cmake_system_name}")
+fi
+
+if [[ -n "${osx_sysroot}" ]]; then
+  configure_common+=(-DCMAKE_OSX_SYSROOT="${osx_sysroot}")
+fi
+
 configure_and_install() {
   local output_dir="$1"
   local prefix="$2"
@@ -152,15 +196,17 @@ fi
 cp "${repo_root}/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 cp "${repo_root}/include/module.modulemap" "${static_install_dir}/include/module.modulemap"
 
-configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON
+if [[ "${build_dynamic}" -eq 1 ]]; then
+  configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON
 
-dynamic_library="${dynamic_install_dir}/lib/librime.dylib"
-if [[ ! -f "${dynamic_library}" ]]; then
-  printf 'expected librime dynamic library was not produced: %s\n' "${dynamic_library}" >&2
-  exit 1
+  dynamic_library="${dynamic_install_dir}/lib/librime.dylib"
+  if [[ ! -f "${dynamic_library}" ]]; then
+    printf 'expected librime dynamic library was not produced: %s\n' "${dynamic_library}" >&2
+    exit 1
+  fi
+
+  cp "${repo_root}/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
+  cp "${repo_root}/include/module.dynamic.modulemap" "${dynamic_install_dir}/include/module.modulemap"
 fi
-
-cp "${repo_root}/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
-cp "${repo_root}/include/module.dynamic.modulemap" "${dynamic_install_dir}/include/module.modulemap"
 
 printf 'built %s at %s\n' "${platform}" "${install_dir}"
