@@ -59,6 +59,8 @@ Package versions use:
 <upstream-version>-pack.<packaging-revision>
 ```
 
+In the build workflow, leaving `upstream_ref` empty builds the latest upstream release tag. Leaving `packaging_version` empty derives the release tag from the upstream version and `packaging_revision`.
+
 Example:
 
 ```text

@@ -8,11 +8,15 @@ on:
         required: true
         default: rime/librime
       upstream_ref:
-        description: Upstream ref to build.
-        required: true
-        default: master
+        description: Upstream ref to build. Leave empty to use the latest upstream release tag.
+        required: false
+        default: ""
+      packaging_revision:
+        description: Packaging revision suffix used when packaging_version is empty.
+        required: false
+        default: "1"
       packaging_version:
-        description: Release tag for this packaged artifact.
+        description: Release tag for this packaged artifact. Leave empty to infer it from the upstream version.
         required: false
         default: ""
 
@@ -38,11 +42,24 @@ jobs:
       - name: Checkout packaging repository
         uses: actions/checkout@v6
 
+      - name: Resolve upstream ref
+        id: resolve-upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          ref="${UPSTREAM_REF}"
+          if [[ -z "${ref}" ]]; then
+            ref="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
+          fi
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout upstream librime
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.upstream_repo }}
-          ref: ${{ inputs.upstream_ref }}
+          ref: ${{ steps.resolve-upstream.outputs.ref }}
           path: vendor/librime
 
       - name: Setup vcpkg
@@ -59,7 +76,7 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          UPSTREAM_REF: ${{ steps.resolve-upstream.outputs.ref }}
           PACKAGING_VERSION: ${{ inputs.packaging_version }}
         run: scripts/build-one-arch.sh ${{ matrix.arch }}
 
@@ -70,7 +87,7 @@ jobs:
         env:
           UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
           UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          UPSTREAM_REF: ${{ steps.resolve-upstream.outputs.ref }}
           PACKAGING_VERSION: ${{ inputs.packaging_version }}
 
       - name: Upload slice
@@ -100,22 +117,25 @@ jobs:
           path: out/macos-x86_64
 
       - name: Import source metadata
-        run: grep -E '^(UPSTREAM_VERSION|UPSTREAM_COMMIT)=' out/macos-arm64/source.env >> "${GITHUB_ENV}"
+        run: grep -E '^(UPSTREAM_REPO|UPSTREAM_REF|UPSTREAM_VERSION|UPSTREAM_COMMIT)=' out/macos-arm64/source.env >> "${GITHUB_ENV}"
 
       - name: Resolve packaging version
         run: |
           version="${PACKAGING_VERSION}"
           if [[ -z "${version}" ]]; then
-            version="$(tr -d '[:space:]' < VERSION)"
+            revision="${PACKAGING_REVISION:-1}"
+            if [[ -z "${UPSTREAM_VERSION}" || "${UPSTREAM_VERSION}" == "unknown" ]]; then
+              echo "cannot infer packaging_version because UPSTREAM_VERSION is ${UPSTREAM_VERSION:-empty}" >&2
+              exit 1
+            fi
+            version="${UPSTREAM_VERSION}-pack.${revision}"
           fi
           echo "PACKAGING_VERSION=${version}" >> "${GITHUB_ENV}"
         env:
           PACKAGING_VERSION: ${{ inputs.packaging_version }}
+          PACKAGING_REVISION: ${{ inputs.packaging_revision }}
 
       - name: Package XCFramework
-        env:
-          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: scripts/package-xcframework.sh
 
       - name: Generate SwiftPM manifest
@@ -125,9 +145,6 @@ jobs:
           scripts/write-package-swift.sh "${artifact_url}" "${checksum}" Package.swift
 
       - name: Commit and tag release manifest
-        env:
-          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/${PACKAGING_VERSION}" >/dev/null 2>&1; then
             echo "tag already exists: ${PACKAGING_VERSION}; skipping manifest commit and tag."
@@ -163,8 +180,6 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: |
           notes="Static macOS XCFramework for ${UPSTREAM_REPO}@${UPSTREAM_REF}."
           if gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1; then

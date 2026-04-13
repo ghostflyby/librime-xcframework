@@ -41,4 +41,4 @@ jobs:
           gh workflow run build.yml \
             -f upstream_repo="${UPSTREAM_REPO}" \
             -f upstream_ref="${latest_tag}" \
-            -f packaging_version="${package_tag}"
+            -f packaging_revision="${PACKAGING_REVISION}"
