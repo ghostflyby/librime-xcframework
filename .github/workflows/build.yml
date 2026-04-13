@@ -72,7 +72,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json', 'triplets/*.cmake') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json', 'triplets/*.cmake', 'ports/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
 

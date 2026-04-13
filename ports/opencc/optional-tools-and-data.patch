@@ -1,0 +1,36 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1d8c8e6..825ed33 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -29,6 +29,8 @@ option(ENABLE_BENCHMARK "Build benchmark tests." OFF)
+ option(ENABLE_DARTS "Build DartsDict (ocd format)." ON)
+ option(BUILD_PYTHON "Build python library" OFF)
+ option(USE_SYSTEM_DARTS "Use system version of Darts" OFF)
++option(BUILD_TOOLS "Build OpenCC command-line tools" ON)
++option(BUILD_DATA "Build OpenCC dictionary data" ON)
+ option(USE_SYSTEM_GOOGLE_BENCHMARK "Use system version of Google Benchmark" OFF)
+ option(USE_SYSTEM_GTEST "Use system version of GoogleTest" OFF)
+ option(USE_SYSTEM_MARISA "Use system version of Marisa" OFF)
+@@ -223,7 +225,9 @@ endif()
+ 
+ add_subdirectory(src)
+ add_subdirectory(doc)
+-add_subdirectory(data)
++if(BUILD_DATA)
++  add_subdirectory(data)
++endif()
+ add_subdirectory(test)
+ 
+ ######## Testing
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 7768c89..983a8a8 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -195,4 +195,6 @@ endif()
+ 
+ # Subdir
+ 
+-add_subdirectory(tools)
++if(BUILD_TOOLS)
++  add_subdirectory(tools)
++endif()

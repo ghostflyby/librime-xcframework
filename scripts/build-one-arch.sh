@@ -133,6 +133,7 @@ configure_common=(
   -DCMAKE_TOOLCHAIN_FILE="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
   -DVCPKG_TARGET_TRIPLET="${triplet}"
   -DVCPKG_OVERLAY_TRIPLETS="${repo_root}/triplets"
+  -DVCPKG_OVERLAY_PORTS="${repo_root}/ports"
   -DVCPKG_MANIFEST_DIR="${repo_root}"
   -DVCPKG_INSTALL_OPTIONS=--allow-unsupported
   -DBUILD_STATIC=ON

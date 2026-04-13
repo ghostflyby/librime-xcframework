@@ -14,6 +14,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 ## Dependencies
 
 - Use this repository's `vcpkg.json` and custom triplets for third-party dependencies.
+- Use overlay ports in `ports/` when a third-party dependency needs packaging-only fixes for Apple targets.
 - Set up CMake and Ninja in CI with `lukka/get-cmake`.
 - Set up vcpkg in CI with `lukka/run-vcpkg`.
 - Use vcpkg's `files` binary cache source with `actions/cache`; do not rely on the removed `x-gha` backend.
