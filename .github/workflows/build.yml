@@ -12,9 +12,9 @@ on:
         required: false
         default: ""
       packaging_revision:
-        description: Packaging revision suffix used when packaging_version is empty.
+        description: Packaging revision suffix used when packaging_version is empty. Leave empty to use the next pack revision for the upstream version.
         required: false
-        default: "1"
+        default: ""
       packaging_version:
         description: Release tag for this packaged artifact. Leave empty to infer it from the upstream version.
         required: false
@@ -133,13 +133,40 @@ jobs:
 
       - name: Resolve packaging version
         run: |
+          set -o pipefail
+
           version="${PACKAGING_VERSION}"
           if [[ -z "${version}" ]]; then
-            revision="${PACKAGING_REVISION:-1}"
             if [[ -z "${UPSTREAM_VERSION}" || "${UPSTREAM_VERSION}" == "unknown" ]]; then
               echo "cannot infer packaging_version because UPSTREAM_VERSION is ${UPSTREAM_VERSION:-empty}" >&2
               exit 1
             fi
+
+            revision="${PACKAGING_REVISION}"
+            if [[ -z "${revision}" ]]; then
+              latest_revision="$(
+                git ls-remote --tags origin "refs/tags/${UPSTREAM_VERSION}-pack.*" |
+                  while read -r _ ref; do
+                    tag="${ref#refs/tags/}"
+                    tag="${tag%^\{\}}"
+                    suffix="${tag#"${UPSTREAM_VERSION}-pack."}"
+                    if [[ "${suffix}" != "${tag}" && "${suffix}" =~ ^[0-9]+$ ]]; then
+                      printf '%s\n' "${suffix}"
+                    fi
+                  done |
+                  sort -n |
+                  tail -n 1
+              )"
+              if [[ -z "${latest_revision}" ]]; then
+                revision="1"
+              else
+                revision="$((latest_revision + 1))"
+              fi
+            elif [[ ! "${revision}" =~ ^[0-9]+$ ]]; then
+              echo "packaging_revision must be numeric, got ${revision}" >&2
+              exit 1
+            fi
+
             version="${UPSTREAM_VERSION}-pack.${revision}"
           fi
           echo "PACKAGING_VERSION=${version}" >> "${GITHUB_ENV}"
@@ -175,11 +202,12 @@ jobs:
               git commit -m "release: ${PACKAGING_VERSION}"
             fi
 
-            scripts/write-build-metadata.sh dist/build-metadata.json
             git tag "${PACKAGING_VERSION}"
             git push origin "HEAD:${GITHUB_REF_NAME}"
             git push origin "refs/tags/${PACKAGING_VERSION}"
           fi
+
+          scripts/write-build-metadata.sh dist/build-metadata.json
 
       - name: Upload distribution artifact
         uses: actions/upload-artifact@v7

@@ -30,7 +30,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Export only the public C API headers and module shim.
 - Release artifacts should include `librime.xcframework.zip` and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.
 - Wrapper versions should use `<upstream-version>-pack.<packaging-revision>` so tags work naturally with SwiftPM version requirements.
-- In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`.
+- In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`. When `packaging_revision` is also empty, choose the next available pack revision for manual builds; scheduled upstream checks should skip publishing if any pack release already exists for that upstream version.
 - The release workflow should generate `Package.swift` with the release zip URL and `swift package compute-checksum`, commit it, and tag that commit before creating the GitHub Release.
 
 ## Review

@@ -8,9 +8,9 @@ on:
         required: true
         default: rime/librime
       packaging_revision:
-        description: Packaging revision suffix.
-        required: true
-        default: "1"
+        description: Packaging revision suffix. Leave empty to skip when any pack release already exists for the upstream version.
+        required: false
+        default: ""
   schedule:
     - cron: "17 2 * * *"
 
@@ -27,18 +27,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           UPSTREAM_REPO: ${{ inputs.upstream_repo || 'rime/librime' }}
-          PACKAGING_REVISION: ${{ inputs.packaging_revision || '1' }}
+          PACKAGING_REVISION: ${{ inputs.packaging_revision }}
         run: |
+          set -o pipefail
+
           latest_tag="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
           upstream_version="${latest_tag#v}"
-          package_tag="${upstream_version}-pack.${PACKAGING_REVISION}"
 
-          if gh release view "${package_tag}" >/dev/null 2>&1; then
-            echo "already published: ${package_tag}"
-            exit 0
+          if [[ -n "${PACKAGING_REVISION}" ]]; then
+            if [[ ! "${PACKAGING_REVISION}" =~ ^[0-9]+$ ]]; then
+              echo "packaging_revision must be numeric, got ${PACKAGING_REVISION}" >&2
+              exit 1
+            fi
+            package_tag="${upstream_version}-pack.${PACKAGING_REVISION}"
+            if gh release view "${package_tag}" >/dev/null 2>&1; then
+              echo "already published: ${package_tag}"
+              exit 0
+            fi
+          else
+            existing_release="$(
+              gh api --paginate "repos/${GH_REPO}/releases" --jq '.[].tag_name' |
+                while read -r tag; do
+                  suffix="${tag#"${upstream_version}-pack."}"
+                  if [[ "${suffix}" != "${tag}" && "${suffix}" =~ ^[0-9]+$ ]]; then
+                    printf '%s\n' "${tag}"
+                  fi
+                done |
+                sort -V |
+                tail -n 1
+            )"
+            if [[ -n "${existing_release}" ]]; then
+              echo "already published for ${latest_tag}: ${existing_release}"
+              exit 0
+            fi
           fi
 
-          gh workflow run build.yml \
-            -f upstream_repo="${UPSTREAM_REPO}" \
-            -f upstream_ref="${latest_tag}" \
-            -f packaging_revision="${PACKAGING_REVISION}"
+          workflow_args=(
+            -f upstream_repo="${UPSTREAM_REPO}"
+            -f upstream_ref="${latest_tag}"
+          )
+          if [[ -n "${PACKAGING_REVISION}" ]]; then
+            workflow_args+=(-f packaging_revision="${PACKAGING_REVISION}")
+          fi
+
+          gh workflow run build.yml "${workflow_args[@]}"
