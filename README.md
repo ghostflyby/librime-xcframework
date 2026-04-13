@@ -13,6 +13,14 @@ A release contains:
 
 The XCFramework contains a static macOS library with arm64 and x86_64 slices and the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
+## Swift Package
+
+Release tags contain a generated `Package.swift` with a binary target that points at the matching GitHub Release asset.
+
+```swift
+.package(url: "https://github.com/ghostflyby/librime-xcframework.git", from: "1.16.1-pack.1")
+```
+
 ## Local Build
 
 Prerequisites:
@@ -48,11 +56,11 @@ Outputs are written to `out/` and `dist/`.
 Package versions use:
 
 ```text
-upstream-<upstream-version>+pack.<packaging-revision>
+<upstream-version>-pack.<packaging-revision>
 ```
 
 Example:
 
 ```text
-upstream-1.16.1+pack.1
+1.16.1-pack.1
 ```

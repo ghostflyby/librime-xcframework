@@ -31,7 +31,7 @@ jobs:
         run: |
           latest_tag="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
           upstream_version="${latest_tag#v}"
-          package_tag="upstream-${upstream_version}+pack.${PACKAGING_REVISION}"
+          package_tag="${upstream_version}-pack.${PACKAGING_REVISION}"
 
           if gh release view "${package_tag}" >/dev/null 2>&1; then
             echo "already published: ${package_tag}"

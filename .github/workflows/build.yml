@@ -118,6 +118,40 @@ jobs:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: scripts/package-xcframework.sh
 
+      - name: Generate SwiftPM manifest
+        run: |
+          checksum="$(swift package compute-checksum dist/librime.xcframework.zip)"
+          artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGING_VERSION}/librime.xcframework.zip"
+          scripts/write-package-swift.sh "${artifact_url}" "${checksum}" Package.swift
+
+      - name: Commit and tag release manifest
+        env:
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${PACKAGING_VERSION}" >/dev/null 2>&1; then
+            echo "tag already exists: ${PACKAGING_VERSION}; skipping manifest commit and tag."
+          else
+            if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
+              echo "release manifest updates must run from a branch ref, got ${GITHUB_REF_TYPE}" >&2
+              exit 1
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Package.swift
+            if git diff --cached --quiet -- Package.swift; then
+              echo "Package.swift already matches ${PACKAGING_VERSION}; tagging current commit."
+            else
+              git commit -m "release: ${PACKAGING_VERSION}"
+            fi
+
+            scripts/write-build-metadata.sh dist/build-metadata.json
+            git tag "${PACKAGING_VERSION}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git push origin "refs/tags/${PACKAGING_VERSION}"
+          fi
+
       - name: Upload distribution artifact
         uses: actions/upload-artifact@v7
         with:
@@ -133,6 +167,8 @@ jobs:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
         run: |
           notes="Static macOS XCFramework for ${UPSTREAM_REPO}@${UPSTREAM_REF}."
-          gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1 && \
-            gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --clobber || \
-            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
+          if gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1; then
+            gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --clobber
+          else
+            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --target "${PACKAGING_VERSION}" --title "${PACKAGING_VERSION}" --notes "${notes}"
+          fi
