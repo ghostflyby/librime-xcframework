@@ -13,7 +13,7 @@ let package = Package(
         .binaryTarget(
             name: "Rime",
             url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.1/librime.xcframework.zip",
-            checksum: "98a4fce2360fb5c4b51312cc84058889eb7951ffe8b5c04a65d59cc1fef2235f"
+            checksum: "a33da0d80e13497bef2590b0f594d07e70730862edbd8c761f289b37130d3eb5"
         )
     ]
 )
