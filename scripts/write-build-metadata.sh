@@ -70,7 +70,6 @@ cat > "${output_path}" <<JSON
   "runner_macos_version": "$(json_escape "${macos_version}")",
   "artifacts": [
     "librime.xcframework.zip",
-    "librime.xcframework.sha256",
     "build-metadata.json"
   ]
 }

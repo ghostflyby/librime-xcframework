@@ -124,7 +124,6 @@ jobs:
           name: librime-xcframework
           path: |
             dist/librime.xcframework.zip
-            dist/librime.xcframework.sha256
             dist/build-metadata.json
 
       - name: Publish release
@@ -135,5 +134,5 @@ jobs:
         run: |
           notes="Static macOS XCFramework for ${UPSTREAM_REPO}@${UPSTREAM_REF}."
           gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1 && \
-            gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/librime.xcframework.sha256 dist/build-metadata.json --clobber || \
-            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/librime.xcframework.sha256 dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
+            gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --clobber || \
+            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"

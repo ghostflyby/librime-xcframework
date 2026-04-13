@@ -9,10 +9,9 @@ This repository builds a binary distribution so Xcode and SwiftPM consumers do n
 A release contains:
 
 - `librime.xcframework.zip`
-- `librime.xcframework.sha256`
 - `build-metadata.json`
 
-The XCFramework contains a static macOS library with arm64 and x86_64 slices and the public librime C API headers.
+The XCFramework contains a static macOS library with arm64 and x86_64 slices and the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
 ## Local Build
 
@@ -57,4 +56,3 @@ Example:
 ```text
 upstream-1.16.1+pack.1
 ```
-

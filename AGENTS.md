@@ -27,7 +27,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Merge vcpkg static dependency archives into each per-architecture `librime.a`.
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.
 - Export only the public C API headers and module shim.
-- Release artifacts should include `librime.xcframework.zip`, `librime.xcframework.sha256`, and `build-metadata.json`.
+- Release artifacts should include `librime.xcframework.zip` and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.
 - Wrapper versions should use `upstream-<upstream-version>+pack.<packaging-revision>`.
 
 ## Review
