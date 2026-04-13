@@ -4,7 +4,8 @@ import PackageDescription
 let package = Package(
     name: "Librime",
     platforms: [
-        .macOS(.v11)
+        .macOS(.v11),
+        .iOS(.v13)
     ],
     products: [
         .library(name: "Rime", targets: ["Rime"]),
@@ -13,13 +14,13 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "Rime",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.3/librime.xcframework.zip",
-            checksum: "9fea58e802b9a90bab6a4a43485c64466bfdcd66ea992913b782ebd5f07a1ed0"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.4/librime.xcframework.zip",
+            checksum: "aa2f93d23264d93546eb06bb898102f85d3c4d3f0c3e3be9407eb934c2e44880"
         ),
         .binaryTarget(
             name: "RimeDynamic",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.3/librime-dynamic.xcframework.zip",
-            checksum: "4d5e27690366a7e68284dbed96ea8499bd65275a0b74d3e07134419a4144aa27"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.4/librime-dynamic.xcframework.zip",
+            checksum: "01a448dba1ce042d13fa2e54a0125792e62e13430c58479e8f47d4e001d2e249"
         )
     ]
 )
