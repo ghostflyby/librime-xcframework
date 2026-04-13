@@ -25,10 +25,7 @@ upstream_repo="${UPSTREAM_REPO:-rime/librime}"
 upstream_ref="${UPSTREAM_REF:-HEAD}"
 upstream_version="${UPSTREAM_VERSION:-unknown}"
 upstream_commit="${UPSTREAM_COMMIT:-unknown}"
-packaging_version="${PACKAGING_VERSION:-}"
-if [[ -z "${packaging_version}" && -f "${repo_root}/VERSION" ]]; then
-  packaging_version="$(tr -d '[:space:]' < "${repo_root}/VERSION")"
-fi
+packaging_version="${PACKAGING_VERSION:-unknown}"
 
 if [[ -d "${source_dir}/.git" ]]; then
   if git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}" >/dev/null 2>&1; then

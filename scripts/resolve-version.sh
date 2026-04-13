@@ -16,9 +16,6 @@ if [[ -z "${source_dir}" ]]; then
 fi
 
 packaging_version="${PACKAGING_VERSION:-}"
-if [[ -z "${packaging_version}" && -f "${repo_root}/VERSION" ]]; then
-  packaging_version="$(tr -d '[:space:]' < "${repo_root}/VERSION")"
-fi
 
 upstream_repo="${UPSTREAM_REPO:-rime/librime}"
 upstream_ref="${UPSTREAM_REF:-}"
