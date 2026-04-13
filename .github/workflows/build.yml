@@ -170,5 +170,5 @@ jobs:
           if gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1; then
             gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --clobber
           else
-            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --target "${PACKAGING_VERSION}" --title "${PACKAGING_VERSION}" --notes "${notes}"
+            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
           fi
