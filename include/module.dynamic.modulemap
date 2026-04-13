@@ -1,4 +1,4 @@
-module RimeDynamic {
+framework module RimeDynamic {
   umbrella header "RimeShim.h"
   export *
 }

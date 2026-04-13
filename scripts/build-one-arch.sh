@@ -33,7 +33,7 @@ case "${slice}" in
     deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphoneos"
-    build_dynamic=0
+    build_dynamic=1
     ;;
   ios-simulator-arm64)
     arch="arm64"
@@ -42,7 +42,7 @@ case "${slice}" in
     deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
-    build_dynamic=0
+    build_dynamic=1
     ;;
   ios-simulator-x86_64)
     arch="x86_64"
@@ -51,7 +51,7 @@ case "${slice}" in
     deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
-    build_dynamic=0
+    build_dynamic=1
     ;;
   *)
     printf 'unsupported slice: %s\n' "${slice}" >&2
