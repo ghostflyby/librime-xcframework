@@ -1,0 +1,4 @@
+module RimeDynamic {
+  umbrella header "RimeShim.h"
+  export *
+}

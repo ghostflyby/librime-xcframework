@@ -1,6 +1,6 @@
 # librime XCFramework
 
-Static macOS XCFramework packaging for upstream `librime`.
+Static and dynamic macOS XCFramework packaging for upstream `librime`.
 
 This repository builds a binary distribution so Xcode and SwiftPM consumers do not need to compile librime and its C++ dependency graph themselves.
 
@@ -9,17 +9,20 @@ This repository builds a binary distribution so Xcode and SwiftPM consumers do n
 A release contains:
 
 - `librime.xcframework.zip`
+- `librime-dynamic.xcframework.zip`
 - `build-metadata.json`
 
-The XCFramework contains a static macOS library with arm64 and x86_64 slices and the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
+The static XCFramework contains a universal macOS `librime.a` with arm64 and x86_64 slices. The dynamic XCFramework contains a universal macOS `librime.dylib`. Both include the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
 ## Swift Package
 
-Release tags contain a generated `Package.swift` with a binary target that points at the matching GitHub Release asset.
+Release tags contain a generated `Package.swift` with binary targets that point at the matching GitHub Release assets.
 
 ```swift
 .package(url: "https://github.com/ghostflyby/librime-xcframework.git", from: "1.16.1-pack.1")
 ```
+
+Use product `Rime` for the static XCFramework and `RimeDynamic` for the dynamic XCFramework.
 
 ## Local Build
 
