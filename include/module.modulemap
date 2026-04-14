@@ -1,5 +1,4 @@
-module Rime {
+module RimeStatic {
   umbrella header "RimeShim.h"
   export *
 }
-

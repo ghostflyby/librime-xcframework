@@ -22,7 +22,22 @@ Release tags contain a generated `Package.swift` with binary targets that point 
 .package(url: "https://github.com/ghostflyby/librime-xcframework.git", from: "1.16.1-pack.1")
 ```
 
-Use product `Rime` for the static XCFramework and `RimeDynamic` for the dynamic framework XCFramework.
+Use product `RimeStatic` for the static XCFramework and `RimeDynamic` for the dynamic framework XCFramework. These products expose the `RimeStatic` and `RimeDynamic` modules directly.
+
+Use product `Rime` for a shim module that re-exports one of the binary modules:
+
+- by default, `Rime` uses the static XCFramework
+- with the SwiftPM 6.1 `dynamic` trait, `Rime` uses the dynamic framework XCFramework
+
+Pass only the `dynamic` trait when selecting the dynamic shim path; direct `RimeStatic` and `RimeDynamic` product dependencies do not need traits.
+
+```swift
+.package(
+    url: "https://github.com/ghostflyby/librime-xcframework.git",
+    from: "1.16.1-pack.1",
+    traits: ["dynamic"]
+)
+```
 
 ## Local Build
 

@@ -13,7 +13,7 @@ dynamic_checksum="$4"
 output_path="${5:-Package.swift}"
 
 cat > "${output_path}" <<SWIFT
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
 import PackageDescription
 
 let package = Package(
@@ -24,11 +24,27 @@ let package = Package(
     ],
     products: [
         .library(name: "Rime", targets: ["Rime"]),
+        .library(name: "RimeStatic", targets: ["RimeStatic"]),
         .library(name: "RimeDynamic", targets: ["RimeDynamic"])
     ],
+    traits: [
+        .default(enabledTraits: ["static"]),
+        .init(name: "static", description: "Use the static librime XCFramework for the Rime shim."),
+        .init(name: "dynamic", description: "Use the dynamic librime XCFramework for the Rime shim.")
+    ],
     targets: [
-        .binaryTarget(
+        .target(
             name: "Rime",
+            dependencies: [
+                .target(name: "RimeStatic", condition: .when(traits: ["static"])),
+                .target(name: "RimeDynamic", condition: .when(traits: ["dynamic"]))
+            ],
+            swiftSettings: [
+                .define("RIME_USE_DYNAMIC", .when(traits: ["dynamic"]))
+            ]
+        ),
+        .binaryTarget(
+            name: "RimeStatic",
             url: "${static_artifact_url}",
             checksum: "${static_checksum}"
         ),
