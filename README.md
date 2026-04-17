@@ -8,7 +8,7 @@ This repository builds a binary distribution so Xcode and SwiftPM consumers do n
 
 A release contains:
 
-- `librime.xcframework.zip`
+- `librime-static.xcframework.zip`
 - `librime-dynamic.xcframework.zip`
 - `build-metadata.json`
 

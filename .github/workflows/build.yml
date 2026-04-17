@@ -206,11 +206,11 @@ jobs:
 
       - name: Generate SwiftPM manifest
         run: |
-          static_checksum="$(swift package compute-checksum dist/librime.xcframework.zip)"
+          static_checksum="$(swift package compute-checksum dist/librime-static.xcframework.zip)"
           dynamic_checksum="$(swift package compute-checksum dist/librime-dynamic.xcframework.zip)"
           release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGING_VERSION}"
           scripts/write-package-swift.sh \
-            "${release_base_url}/librime.xcframework.zip" "${static_checksum}" \
+            "${release_base_url}/librime-static.xcframework.zip" "${static_checksum}" \
             "${release_base_url}/librime-dynamic.xcframework.zip" "${dynamic_checksum}" \
             Package.swift
 
@@ -245,7 +245,7 @@ jobs:
         with:
           name: librime-xcframework
           path: |
-            dist/librime.xcframework.zip
+            dist/librime-static.xcframework.zip
             dist/librime-dynamic.xcframework.zip
             dist/build-metadata.json
 
@@ -255,7 +255,7 @@ jobs:
         run: |
           notes="Static and dynamic macOS/iOS XCFrameworks for ${UPSTREAM_REPO}@${UPSTREAM_REF}."
           if gh release view "${PACKAGING_VERSION}" >/dev/null 2>&1; then
-            gh release upload "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/librime-dynamic.xcframework.zip dist/build-metadata.json --clobber
+            gh release upload "${PACKAGING_VERSION}" dist/librime-static.xcframework.zip dist/librime-dynamic.xcframework.zip dist/build-metadata.json --clobber
           else
-            gh release create "${PACKAGING_VERSION}" dist/librime.xcframework.zip dist/librime-dynamic.xcframework.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
+            gh release create "${PACKAGING_VERSION}" dist/librime-static.xcframework.zip dist/librime-dynamic.xcframework.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
           fi

@@ -5,10 +5,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 out_dir="${OUT_DIR:-${repo_root}/out}"
 dist_dir="${DIST_DIR:-${repo_root}/dist}"
-static_xcframework_path="${dist_dir}/librime.xcframework"
-static_zip_path="${dist_dir}/librime.xcframework.zip"
+static_xcframework_path="${dist_dir}/librime-static.xcframework"
+static_zip_path="${dist_dir}/librime-static.xcframework.zip"
 dynamic_xcframework_path="${dist_dir}/librime-dynamic.xcframework"
 dynamic_zip_path="${dist_dir}/librime-dynamic.xcframework.zip"
+legacy_static_xcframework_path="${dist_dir}/librime.xcframework"
+legacy_static_zip_path="${dist_dir}/librime.xcframework.zip"
 legacy_checksum_path="${dist_dir}/librime.xcframework.sha256"
 
 arm64_static_lib="${out_dir}/macos-arm64/static/lib/librime.a"
@@ -65,6 +67,7 @@ done
 rm -rf \
   "${static_xcframework_path}" "${static_zip_path}" \
   "${dynamic_xcframework_path}" "${dynamic_zip_path}" \
+  "${legacy_static_xcframework_path}" "${legacy_static_zip_path}" \
   "${legacy_checksum_path}" "${universal_dir}" "${ios_simulator_universal_dir}" "${dynamic_frameworks_dir}"
 mkdir -p "${dist_dir}"
 mkdir -p "${universal_dir}/static/lib" "${universal_dir}/dynamic/lib" "${ios_simulator_universal_dir}/static/lib" "${ios_simulator_universal_dir}/dynamic/lib"
@@ -165,7 +168,7 @@ write_dynamic_slice_modulemaps
 
 (
   cd "${dist_dir}"
-  ditto -c -k --sequesterRsrc --keepParent "librime.xcframework" "librime.xcframework.zip"
+  ditto -c -k --sequesterRsrc --keepParent "librime-static.xcframework" "librime-static.xcframework.zip"
   ditto -c -k --sequesterRsrc --keepParent "librime-dynamic.xcframework" "librime-dynamic.xcframework.zip"
 )
 
