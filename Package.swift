@@ -1,4 +1,4 @@
-// swift-tools-version: 6.1
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
@@ -8,26 +8,10 @@ let package = Package(
         .iOS(.v13)
     ],
     products: [
-        .library(name: "Rime", targets: ["Rime"]),
         .library(name: "RimeStatic", targets: ["RimeStatic"]),
         .library(name: "RimeDynamic", targets: ["RimeDynamic"])
     ],
-    traits: [
-        .default(enabledTraits: ["static"]),
-        .init(name: "static", description: "Use the static librime XCFramework for the Rime shim."),
-        .init(name: "dynamic", description: "Use the dynamic librime XCFramework for the Rime shim.")
-    ],
     targets: [
-        .target(
-            name: "Rime",
-            dependencies: [
-                .target(name: "RimeStatic", condition: .when(traits: ["static"])),
-                .target(name: "RimeDynamic", condition: .when(traits: ["dynamic"]))
-            ],
-            swiftSettings: [
-                .define("RIME_USE_DYNAMIC", .when(traits: ["dynamic"]))
-            ]
-        ),
         .binaryTarget(
             name: "RimeStatic",
             url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.16.1-pack.6/librime.xcframework.zip",
