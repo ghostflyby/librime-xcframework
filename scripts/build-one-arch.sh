@@ -168,6 +168,12 @@ configure_and_install() {
   cmake --build "${output_dir}" --config "${configuration}" --target install
 }
 
+prune_exported_headers() {
+  local include_dir="$1"
+
+  rm -f "${include_dir}/rime_api_deprecated.h"
+}
+
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
 
 static_archive="${static_install_dir}/lib/librime.a"
@@ -196,6 +202,7 @@ fi
 
 cp "${repo_root}/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 cp "${repo_root}/include/module.modulemap" "${static_install_dir}/include/module.modulemap"
+prune_exported_headers "${static_install_dir}/include"
 
 if [[ "${build_dynamic}" -eq 1 ]]; then
   configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON
@@ -208,6 +215,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
 
   cp "${repo_root}/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
   cp "${repo_root}/include/module.dynamic.modulemap" "${dynamic_install_dir}/include/module.modulemap"
+  prune_exported_headers "${dynamic_install_dir}/include"
 fi
 
 printf 'built %s at %s\n' "${platform}" "${install_dir}"
