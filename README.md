@@ -10,6 +10,9 @@ A release contains:
 
 - `librime-static.xcframework.zip`
 - `librime-dynamic.xcframework.zip`
+- `LICENSE.txt`
+- `THIRD_PARTY_NOTICES.md`
+- `third-party-notices.zip`
 - `build-metadata.json`
 
 The static XCFramework contains macOS arm64/x86_64, iOS device arm64, and iOS simulator arm64/x86_64 library slices. The dynamic XCFramework contains `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator. Both include the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
@@ -71,3 +74,13 @@ Example:
 ```text
 1.16.1-pack.1
 ```
+
+## License
+
+The packaging wrapper code in this repository is licensed under the BSD
+3-Clause License. Binary release artifacts include upstream `librime`, which is
+also BSD 3-Clause licensed, and may include statically linked third-party
+dependencies resolved by vcpkg.
+
+Keep `LICENSE.txt`, `THIRD_PARTY_NOTICES.md`, and `third-party-notices.zip`
+with redistributed binary artifacts.

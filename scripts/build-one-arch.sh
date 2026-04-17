@@ -174,6 +174,28 @@ prune_exported_headers() {
   rm -f "${include_dir}/rime_api_deprecated.h"
 }
 
+collect_vcpkg_notices() {
+  local notices_dir="$1"
+  local share_dir copyright_file port_name destination
+
+  rm -rf "${notices_dir}"
+  mkdir -p "${notices_dir}/vcpkg"
+
+  for share_dir in "${static_build_dir}/vcpkg_installed/${triplet}/share" "${vcpkg_root}/installed/${triplet}/share"; do
+    if [[ ! -d "${share_dir}" ]]; then
+      continue
+    fi
+
+    while IFS= read -r -d '' copyright_file; do
+      port_name="$(basename "$(dirname "${copyright_file}")")"
+      destination="${notices_dir}/vcpkg/${port_name}.txt"
+      if [[ ! -f "${destination}" ]]; then
+        cp "${copyright_file}" "${destination}"
+      fi
+    done < <(find "${share_dir}" -mindepth 2 -maxdepth 2 -type f -name copyright -print0)
+  done
+}
+
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
 
 static_archive="${static_install_dir}/lib/librime.a"
@@ -217,5 +239,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
   cp "${repo_root}/include/module.dynamic.modulemap" "${dynamic_install_dir}/include/module.modulemap"
   prune_exported_headers "${dynamic_install_dir}/include"
 fi
+
+collect_vcpkg_notices "${install_dir}/notices"
 
 printf 'built %s at %s\n' "${platform}" "${install_dir}"

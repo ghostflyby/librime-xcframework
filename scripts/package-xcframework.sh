@@ -9,6 +9,10 @@ static_xcframework_path="${dist_dir}/librime-static.xcframework"
 static_zip_path="${dist_dir}/librime-static.xcframework.zip"
 dynamic_xcframework_path="${dist_dir}/librime-dynamic.xcframework"
 dynamic_zip_path="${dist_dir}/librime-dynamic.xcframework.zip"
+license_output_path="${dist_dir}/LICENSE.txt"
+third_party_notice_output_path="${dist_dir}/THIRD_PARTY_NOTICES.md"
+third_party_notice_bundle_path="${dist_dir}/third-party-notices"
+third_party_notice_zip_path="${dist_dir}/third-party-notices.zip"
 legacy_static_xcframework_path="${dist_dir}/librime.xcframework"
 legacy_static_zip_path="${dist_dir}/librime.xcframework.zip"
 legacy_checksum_path="${dist_dir}/librime.xcframework.sha256"
@@ -67,6 +71,8 @@ done
 rm -rf \
   "${static_xcframework_path}" "${static_zip_path}" \
   "${dynamic_xcframework_path}" "${dynamic_zip_path}" \
+  "${license_output_path}" "${third_party_notice_output_path}" \
+  "${third_party_notice_bundle_path}" "${third_party_notice_zip_path}" \
   "${legacy_static_xcframework_path}" "${legacy_static_zip_path}" \
   "${legacy_checksum_path}" "${universal_dir}" "${ios_simulator_universal_dir}" "${dynamic_frameworks_dir}"
 mkdir -p "${dist_dir}"
@@ -130,6 +136,33 @@ MODULEMAP
   done < <(find "${dynamic_xcframework_path}" -mindepth 2 -maxdepth 2 -name 'RimeDynamic.framework' -type d -print0)
 }
 
+copy_distribution_notices() {
+  local notices_readme_path="${third_party_notice_bundle_path}/README.md"
+  local notice_file port_name destination
+
+  cp "${repo_root}/LICENSE" "${license_output_path}"
+  cp "${repo_root}/THIRD_PARTY_NOTICES.md" "${third_party_notice_output_path}"
+
+  mkdir -p "${third_party_notice_bundle_path}/vcpkg"
+  cat > "${notices_readme_path}" <<'README'
+# Third-Party Dependency Notices
+
+This directory contains vcpkg-provided license texts for third-party dependency
+code that may be linked into the librime XCFramework binary artifacts.
+
+The release also includes LICENSE.txt for this packaging wrapper and
+THIRD_PARTY_NOTICES.md for the upstream librime notice.
+README
+
+  while IFS= read -r -d '' notice_file; do
+    port_name="$(basename "${notice_file}" .txt)"
+    destination="${third_party_notice_bundle_path}/vcpkg/${port_name}.txt"
+    if [[ ! -f "${destination}" ]]; then
+      cp "${notice_file}" "${destination}"
+    fi
+  done < <(find "${out_dir}" -path '*/notices/vcpkg/*.txt' -type f -print0)
+}
+
 rsync -a --delete "${arm64_static_headers}/" "${static_universal_headers}/"
 lipo -create "${arm64_static_lib}" "${x86_64_static_lib}" -output "${static_universal_lib}"
 rsync -a --delete "${ios_simulator_arm64_static_headers}/" "${ios_simulator_universal_headers}/"
@@ -166,13 +199,17 @@ xcodebuild -create-xcframework \
 
 write_dynamic_slice_modulemaps
 
+copy_distribution_notices
+
 (
   cd "${dist_dir}"
   ditto -c -k --sequesterRsrc --keepParent "librime-static.xcframework" "librime-static.xcframework.zip"
   ditto -c -k --sequesterRsrc --keepParent "librime-dynamic.xcframework" "librime-dynamic.xcframework.zip"
+  ditto -c -k --sequesterRsrc --keepParent "third-party-notices" "third-party-notices.zip"
 )
 
 "${script_dir}/write-build-metadata.sh" "${dist_dir}/build-metadata.json"
 
 printf 'packaged %s\n' "${static_zip_path}"
 printf 'packaged %s\n' "${dynamic_zip_path}"
+printf 'packaged %s\n' "${third_party_notice_zip_path}"
