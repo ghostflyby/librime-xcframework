@@ -1,0 +1,4 @@
+module RimeSystem [system] {
+  umbrella header "RimeSystemShim.h"
+  export *
+}

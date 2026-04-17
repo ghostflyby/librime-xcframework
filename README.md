@@ -24,6 +24,8 @@ Release tags contain a generated `Package.swift` with binary targets that point 
 
 Use product `RimeStatic` for the static XCFramework and `RimeDynamic` for the dynamic framework XCFramework. These products expose the `RimeStatic` and `RimeDynamic` modules directly.
 
+Use product `RimeSystem` to bind against a system-provided or user-replaced librime implementation. `RimeSystem` uses `pkg-config rime` for compiler and linker flags, does not force a specific library name in its module map, and exposes the `RimeSystem` module.
+
 ## Local Build
 
 Prerequisites:

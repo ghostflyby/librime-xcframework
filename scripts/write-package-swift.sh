@@ -24,7 +24,8 @@ let package = Package(
     ],
     products: [
         .library(name: "RimeStatic", targets: ["RimeStatic"]),
-        .library(name: "RimeDynamic", targets: ["RimeDynamic"])
+        .library(name: "RimeDynamic", targets: ["RimeDynamic"]),
+        .library(name: "RimeSystem", targets: ["RimeSystem"])
     ],
     targets: [
         .binaryTarget(
@@ -36,6 +37,11 @@ let package = Package(
             name: "RimeDynamic",
             url: "${dynamic_artifact_url}",
             checksum: "${dynamic_checksum}"
+        ),
+        .systemLibrary(
+            name: "RimeSystem",
+            path: "Sources/RimeSystem",
+            pkgConfig: "rime"
         )
     ]
 )

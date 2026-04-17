@@ -30,11 +30,12 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.
 - Build iOS device arm64 and combine iOS simulator arm64 and x86_64 archives into a universal simulator static library before creating the static XCFramework.
 - Package dynamic outputs as `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator before creating the dynamic XCFramework.
-- Export only the public C API headers and module maps. The static binary module is `RimeStatic`, and the dynamic binary module is `RimeDynamic`.
+- Export only the public C API headers and module maps. The static binary module is `RimeStatic`, the dynamic binary module is `RimeDynamic`, and the system-library module is `RimeSystem`.
+- Keep `RimeSystem` implementation-neutral: use `pkg-config rime` for flags and do not add a module-map `link` directive that would force one library name.
 - Release artifacts should include `librime.xcframework.zip`, `librime-dynamic.xcframework.zip`, and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.
 - Wrapper versions should use `<upstream-version>-pack.<packaging-revision>` so tags work naturally with SwiftPM version requirements.
 - In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`. When `packaging_revision` is also empty, choose the next available pack revision for manual builds; scheduled upstream checks should skip publishing if any pack release already exists for that upstream version.
-- The release workflow should generate `Package.swift` with direct `RimeStatic` and `RimeDynamic` binary products using release zip URLs and `swift package compute-checksum`, commit it, and tag that commit before creating the GitHub Release.
+- The release workflow should generate `Package.swift` with direct `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, commit it, and tag that commit before creating the GitHub Release.
 
 ## Review
 
