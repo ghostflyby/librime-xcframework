@@ -111,6 +111,22 @@ create_dynamic_framework() {
 PLIST
 }
 
+write_dynamic_slice_modulemaps() {
+  local framework_path
+  local slice_dir
+
+  while IFS= read -r -d '' framework_path; do
+    slice_dir="$(dirname "${framework_path}")"
+    cat > "${slice_dir}/module.modulemap" <<MODULEMAP
+module RimeDynamic {
+  umbrella header "RimeDynamic.framework/Headers/RimeShim.h"
+  link framework "RimeDynamic"
+  export *
+}
+MODULEMAP
+  done < <(find "${dynamic_xcframework_path}" -mindepth 2 -maxdepth 2 -name 'RimeDynamic.framework' -type d -print0)
+}
+
 rsync -a --delete "${arm64_static_headers}/" "${static_universal_headers}/"
 lipo -create "${arm64_static_lib}" "${x86_64_static_lib}" -output "${static_universal_lib}"
 rsync -a --delete "${ios_simulator_arm64_static_headers}/" "${ios_simulator_universal_headers}/"
@@ -144,6 +160,8 @@ xcodebuild -create-xcframework \
   -framework "${ios_device_dynamic_framework}" \
   -framework "${ios_simulator_dynamic_framework}" \
   -output "${dynamic_xcframework_path}"
+
+write_dynamic_slice_modulemaps
 
 (
   cd "${dist_dir}"
