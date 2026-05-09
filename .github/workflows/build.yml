@@ -69,7 +69,7 @@ jobs:
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Cache vcpkg binary packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
           key: vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json', 'triplets/*.cmake', 'ports/**') }}
