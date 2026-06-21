@@ -53,7 +53,7 @@ jobs:
             platform: ios-simulator-x86_64
     steps:
       - name: Checkout packaging repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Resolve upstream ref
         id: resolve-upstream
@@ -77,7 +77,7 @@ jobs:
             vcpkg-binary-${{ runner.os }}-${{ matrix.platform }}-
 
       - name: Checkout upstream librime
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.upstream_repo }}
           ref: ${{ steps.resolve-upstream.outputs.ref }}
@@ -123,7 +123,7 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout packaging repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download arm64 slice
         uses: actions/download-artifact@v8
