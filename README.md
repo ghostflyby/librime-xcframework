@@ -15,7 +15,7 @@ A release contains:
 - `third-party-notices.zip`
 - `build-metadata.json`
 
-The static XCFramework contains macOS arm64/x86_64, iOS device arm64, and iOS simulator arm64/x86_64 library slices. The dynamic XCFramework contains `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator. Both include the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
+The static XCFramework contains macOS arm64/x86_64, iOS device arm64, and iOS simulator arm64/x86_64 library slices. The dynamic XCFramework contains `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator. The macOS slice is a versioned deep bundle (`Versions/A`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic`) so SwiftPM-embedded copies already satisfy macOS app validation without a post-embed fix-up script. Both include the public librime C API headers. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
 ## Swift Package
 
