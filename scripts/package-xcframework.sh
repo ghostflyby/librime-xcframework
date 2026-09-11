@@ -78,21 +78,12 @@ rm -rf \
 mkdir -p "${dist_dir}"
 mkdir -p "${universal_dir}/static/lib" "${universal_dir}/dynamic/lib" "${ios_simulator_universal_dir}/static/lib" "${ios_simulator_universal_dir}/dynamic/lib"
 
-create_dynamic_framework() {
-  local framework_path="$1"
-  local binary_path="$2"
-  local headers_path="$3"
-  local minimum_os_version="$4"
+write_dynamic_info_plist() {
+  local plist_path="$1"
+  local minimum_os_version="$2"
   local framework_name="RimeDynamic"
 
-  rm -rf "${framework_path}"
-  mkdir -p "${framework_path}/Headers" "${framework_path}/Modules"
-  cp "${binary_path}" "${framework_path}/${framework_name}"
-  chmod u+w "${framework_path}/${framework_name}"
-  install_name_tool -id "@rpath/${framework_name}.framework/${framework_name}" "${framework_path}/${framework_name}"
-  rsync -a --delete --exclude module.modulemap "${headers_path}/" "${framework_path}/Headers/"
-  cp "${repo_root}/include/module.dynamic.modulemap" "${framework_path}/Modules/module.modulemap"
-  cat > "${framework_path}/Info.plist" <<PLIST
+  cat > "${plist_path}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -118,6 +109,49 @@ create_dynamic_framework() {
 </dict>
 </plist>
 PLIST
+}
+
+create_dynamic_framework() {
+  local framework_path="$1"
+  local binary_path="$2"
+  local headers_path="$3"
+  local minimum_os_version="$4"
+  local framework_name="RimeDynamic"
+
+  rm -rf "${framework_path}"
+  mkdir -p "${framework_path}/Headers" "${framework_path}/Modules"
+  cp "${binary_path}" "${framework_path}/${framework_name}"
+  chmod u+w "${framework_path}/${framework_name}"
+  install_name_tool -id "@rpath/${framework_name}.framework/${framework_name}" "${framework_path}/${framework_name}"
+  rsync -a --delete --exclude module.modulemap "${headers_path}/" "${framework_path}/Headers/"
+  cp "${repo_root}/include/module.dynamic.modulemap" "${framework_path}/Modules/module.modulemap"
+  write_dynamic_info_plist "${framework_path}/Info.plist" "${minimum_os_version}"
+}
+
+# macOS validates embedded frameworks as versioned bundles, so the macOS slice
+# must be a deep package (Versions/A) with a Versions/A install name; a shallow
+# copy fails app validation after SPM embedding.
+create_macos_dynamic_framework() {
+  local framework_path="$1"
+  local binary_path="$2"
+  local headers_path="$3"
+  local minimum_os_version="$4"
+  local framework_name="RimeDynamic"
+  local bundle_root="${framework_path}/Versions/A"
+
+  rm -rf "${framework_path}"
+  mkdir -p "${bundle_root}/Headers" "${bundle_root}/Modules" "${bundle_root}/Resources"
+  cp "${binary_path}" "${bundle_root}/${framework_name}"
+  chmod u+w "${bundle_root}/${framework_name}"
+  install_name_tool -id "@rpath/${framework_name}.framework/Versions/A/${framework_name}" "${bundle_root}/${framework_name}"
+  rsync -a --delete --exclude module.modulemap "${headers_path}/" "${bundle_root}/Headers/"
+  cp "${repo_root}/include/module.dynamic.modulemap" "${bundle_root}/Modules/module.modulemap"
+  write_dynamic_info_plist "${bundle_root}/Resources/Info.plist" "${minimum_os_version}"
+  ln -sfn "A" "${framework_path}/Versions/Current"
+  ln -sfn "Versions/Current/${framework_name}" "${framework_path}/${framework_name}"
+  ln -sfn "Versions/Current/Headers" "${framework_path}/Headers"
+  ln -sfn "Versions/Current/Modules" "${framework_path}/Modules"
+  ln -sfn "Versions/Current/Resources" "${framework_path}/Resources"
 }
 
 write_dynamic_slice_modulemaps() {
@@ -187,7 +221,7 @@ lipo -create \
   "${ios_simulator_x86_64_dynamic_lib}" \
   -output "${ios_simulator_dynamic_universal_lib}"
 
-create_dynamic_framework "${macos_dynamic_framework}" "${dynamic_universal_lib}" "${dynamic_universal_headers}" "11.0"
+create_macos_dynamic_framework "${macos_dynamic_framework}" "${dynamic_universal_lib}" "${dynamic_universal_headers}" "11.0"
 create_dynamic_framework "${ios_device_dynamic_framework}" "${ios_device_dynamic_lib}" "${ios_device_dynamic_headers}" "13.0"
 create_dynamic_framework "${ios_simulator_dynamic_framework}" "${ios_simulator_dynamic_universal_lib}" "${ios_simulator_arm64_dynamic_headers}" "13.0"
 
