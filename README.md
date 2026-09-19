@@ -56,11 +56,21 @@ Xcode embeds the `RimeDynamic` product into every target that declares it and of
 
 The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
 
+### Swapping the implementation (replaceable librime)
+
+`RimeDynamicStub` fixes a contract, not an implementation. Declaring it emits `-framework RimeDynamic` — a load command for `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` plus a symbol requirement equal to the skeleton's exported list — and nothing else: whatever framework dyld resolves under that install name at runtime is the implementation. A wrapper library that links through the stub (directly, or through a package trait such as RimeKit's `librimeDynamic`) therefore leaves the choice of the librime binary to the final app:
+
+1. **Released binary (default)** — declare `RimeDynamic` on the app target to embed the packaged framework.
+2. **Custom or patched librime** — repackage the replacement under the same identity: bundle name `RimeDynamic.framework`, versioned layout `Versions/A/RimeDynamic`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` (set with `install_name_tool -id`; the replacement's own dependencies must remain resolvable). Embed and sign it in place of the packaged copy — the wrapper library needs no rebuild. The replacement's exported symbols must cover the skeleton's list of the tag the library was built against; a framework older than the skeleton fails at link time, a newer one fails at launch.
+3. **System librime (e.g. Homebrew)** — a bare `librime.dylib` is not a drop-in for the stub: its install name differs. Either wrap it into the framework identity above, or use the `RimeSystem` product at the package-graph level (pkg-config), which replaces `Rime` and cannot coexist with it.
+
+User data directories (`RimeTraits`) are independent of the binary: swapping the implementation does not touch deployed schemas or user configuration.
+
 ### Code coverage in app-host test graphs
 
 Releases up to 1.17.0-pack.6 shipped the `Rime` headers product as a compiled Clang target. When a scheme with code coverage enabled built a test graph sharing that product between an app host and a test bundle, Xcode built the product as a dynamic framework whose link failed with `Undefined symbols: ___llvm_profile_runtime`: coverage instrumentation references the profile runtime from every translation unit (even empty or data-only ones), and the dynamic product framework link omits it.
 
-The headers product now compiles nothing on the consumer side, so coverage builds are unaffected from the release that carries this change on. For older releases, scope the scheme's coverage targets to your own targets or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
+The headers product now compiles nothing on the consumer side, so coverage builds are unaffected from the release that carries this change on. Since 1.17.0-pack.8 the `RimeDynamicStub` placeholder translation unit is Swift for the same reason: its product variant links the profile runtime through the Swift driver, while a C translation unit inside such a variant fails the same way. For older releases, scope the scheme's coverage targets to your own targets or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
 
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
