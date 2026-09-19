@@ -1,1 +1,0 @@
-int rime_dynamic_stub_present;
