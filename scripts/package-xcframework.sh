@@ -151,6 +151,30 @@ create_macos_dynamic_framework() {
   ln -sfn "Versions/Current/Resources" "${framework_path}/Resources"
 }
 
+# Linker stubs let XPC and extension targets link the dynamic framework without
+# embedding it and share the app's single embedded copy; the release workflow
+# commits them under Sources/RimeDynamicStub. Generated from the same dylibs
+# that go into the release. tapi writes the tbd next to its input, so each
+# binary is copied to scratch first to keep the framework directories clean.
+generate_linker_stubs() {
+  local stubs_dir="${out_dir}/linker-stubs"
+  local platform binary
+
+  rm -rf "${stubs_dir}"
+  for platform in macos ios ios-simulator; do
+    case "${platform}" in
+      macos) binary="${macos_dynamic_framework}/Versions/A/RimeDynamic" ;;
+      ios) binary="${ios_device_dynamic_framework}/RimeDynamic" ;;
+      ios-simulator) binary="${ios_simulator_dynamic_framework}/RimeDynamic" ;;
+    esac
+    mkdir -p "${stubs_dir}/.scratch/${platform}" "${stubs_dir}/${platform}"
+    cp "${binary}" "${stubs_dir}/.scratch/${platform}/RimeDynamic"
+    (cd "${stubs_dir}/.scratch/${platform}" && xcrun tapi stubify RimeDynamic)
+    mv "${stubs_dir}/.scratch/${platform}/RimeDynamic.tbd" "${stubs_dir}/${platform}/libRimeDynamic.tbd"
+  done
+  rm -rf "${stubs_dir}/.scratch"
+}
+
 copy_distribution_notices() {
   local notices_readme_path="${third_party_notice_bundle_path}/README.md"
   local notice_file port_name destination
@@ -211,6 +235,8 @@ xcodebuild -create-xcframework \
   -framework "${ios_device_dynamic_framework}" \
   -framework "${ios_simulator_dynamic_framework}" \
   -output "${dynamic_xcframework_path}"
+
+generate_linker_stubs
 
 copy_distribution_notices
 
