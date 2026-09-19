@@ -60,7 +60,7 @@ The skeletons are generated with `tapi stubify` from the released dylibs by the 
 
 When a scheme with code coverage enabled builds a test graph where an app host and a test bundle share a package product, Xcode builds that product as a dynamic framework. Objects of Clang targets are then compiled with `-fprofile-instr-generate -fcoverage-mapping`, and every translation unit — even an empty or data-only one — references `___llvm_profile_runtime`. The product framework link does not include the profile runtime, so `build-for-testing` fails with `Undefined symbols: ___llvm_profile_runtime`. This is an Xcode/SwiftPM integration gap for Clang targets under coverage, not something the package can neutralize: no translation unit content escapes instrumentation, and adding profile-runtime linkage to the headers target would violate its zero-linkage contract.
 
-Scope the scheme's coverage targets to your own targets (uninstrumented package targets link cleanly) or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
+Scope the scheme's coverage targets to your own targets (uninstrumented package targets link cleanly) or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected. Forcing the affected products to build as static libraries (`.library(type: .static)`) is a common workaround because the failure is specific to dynamic product frameworks, but it duplicates package code into every linking image — avoid it when a package is consumed by both an app and its test bundle.
 
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
