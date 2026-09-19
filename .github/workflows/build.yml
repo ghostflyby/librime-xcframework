@@ -213,6 +213,15 @@ jobs:
             "${release_base_url}/librime-static.xcframework.zip" "${static_checksum}" \
             "${release_base_url}/librime-dynamic.xcframework.zip" "${dynamic_checksum}" \
             Package.swift
+          rsync -a --delete --exclude module.modulemap out/macos-arm64/dynamic/include/ Sources/RimeHeaders/include/
+          cat > Sources/RimeHeaders/include/module.modulemap <<'MODULEMAP'
+          module Rime {
+            umbrella header "RimeShim.h"
+            export *
+          }
+          MODULEMAP
+          printf '#include "RimeShim.h"\n' > "${RUNNER_TEMP}/rime-module-smoke.c"
+          xcrun clang -fmodules -fsyntax-only -I Sources/RimeHeaders/include "${RUNNER_TEMP}/rime-module-smoke.c"
 
       - name: Commit and tag release manifest
         run: |
@@ -226,9 +235,9 @@ jobs:
 
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add Package.swift
-            if git diff --cached --quiet -- Package.swift; then
-              echo "Package.swift already matches ${PACKAGING_VERSION}; tagging current commit."
+            git add Package.swift Sources/RimeHeaders
+            if git diff --cached --quiet -- Package.swift Sources/RimeHeaders; then
+              echo "release manifest already matches ${PACKAGING_VERSION}; tagging current commit."
             else
               git commit -m "release: ${PACKAGING_VERSION}"
             fi

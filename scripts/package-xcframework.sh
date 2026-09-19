@@ -119,12 +119,11 @@ create_dynamic_framework() {
   local framework_name="RimeDynamic"
 
   rm -rf "${framework_path}"
-  mkdir -p "${framework_path}/Headers" "${framework_path}/Modules"
+  mkdir -p "${framework_path}/Headers"
   cp "${binary_path}" "${framework_path}/${framework_name}"
   chmod u+w "${framework_path}/${framework_name}"
   install_name_tool -id "@rpath/${framework_name}.framework/${framework_name}" "${framework_path}/${framework_name}"
   rsync -a --delete --exclude module.modulemap "${headers_path}/" "${framework_path}/Headers/"
-  cp "${repo_root}/include/module.dynamic.modulemap" "${framework_path}/Modules/module.modulemap"
   write_dynamic_info_plist "${framework_path}/Info.plist" "${minimum_os_version}"
 }
 
@@ -140,34 +139,16 @@ create_macos_dynamic_framework() {
   local bundle_root="${framework_path}/Versions/A"
 
   rm -rf "${framework_path}"
-  mkdir -p "${bundle_root}/Headers" "${bundle_root}/Modules" "${bundle_root}/Resources"
+  mkdir -p "${bundle_root}/Headers" "${bundle_root}/Resources"
   cp "${binary_path}" "${bundle_root}/${framework_name}"
   chmod u+w "${bundle_root}/${framework_name}"
   install_name_tool -id "@rpath/${framework_name}.framework/Versions/A/${framework_name}" "${bundle_root}/${framework_name}"
   rsync -a --delete --exclude module.modulemap "${headers_path}/" "${bundle_root}/Headers/"
-  cp "${repo_root}/include/module.dynamic.modulemap" "${bundle_root}/Modules/module.modulemap"
   write_dynamic_info_plist "${bundle_root}/Resources/Info.plist" "${minimum_os_version}"
   ln -sfn "A" "${framework_path}/Versions/Current"
   ln -sfn "Versions/Current/${framework_name}" "${framework_path}/${framework_name}"
   ln -sfn "Versions/Current/Headers" "${framework_path}/Headers"
-  ln -sfn "Versions/Current/Modules" "${framework_path}/Modules"
   ln -sfn "Versions/Current/Resources" "${framework_path}/Resources"
-}
-
-write_dynamic_slice_modulemaps() {
-  local framework_path
-  local slice_dir
-
-  while IFS= read -r -d '' framework_path; do
-    slice_dir="$(dirname "${framework_path}")"
-    cat > "${slice_dir}/module.modulemap" <<MODULEMAP
-module RimeDynamic {
-  umbrella header "RimeDynamic.framework/Headers/RimeShim.h"
-  link framework "RimeDynamic"
-  export *
-}
-MODULEMAP
-  done < <(find "${dynamic_xcframework_path}" -mindepth 2 -maxdepth 2 -name 'RimeDynamic.framework' -type d -print0)
 }
 
 copy_distribution_notices() {
@@ -230,8 +211,6 @@ xcodebuild -create-xcframework \
   -framework "${ios_device_dynamic_framework}" \
   -framework "${ios_simulator_dynamic_framework}" \
   -output "${dynamic_xcframework_path}"
-
-write_dynamic_slice_modulemaps
 
 copy_distribution_notices
 

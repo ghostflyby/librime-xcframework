@@ -130,6 +130,7 @@ configure_common=(
   -DCMAKE_OSX_ARCHITECTURES="${arch}"
   -DCMAKE_OSX_DEPLOYMENT_TARGET="${deployment_target}"
   -DCMAKE_INSTALL_NAME_DIR="@rpath"
+  -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-headerpad_max_install_names"
   -DCMAKE_TOOLCHAIN_FILE="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
   -DVCPKG_TARGET_TRIPLET="${triplet}"
   -DVCPKG_OVERLAY_TRIPLETS="${repo_root}/triplets"
@@ -222,8 +223,7 @@ else
   printf 'warning: no vcpkg dependency archives found to merge\n' >&2
 fi
 
-cp "${repo_root}/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
-cp "${repo_root}/include/module.modulemap" "${static_install_dir}/include/module.modulemap"
+cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 prune_exported_headers "${static_install_dir}/include"
 
 if [[ "${build_dynamic}" -eq 1 ]]; then
@@ -235,8 +235,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
     exit 1
   fi
 
-  cp "${repo_root}/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
-  cp "${repo_root}/include/module.dynamic.modulemap" "${dynamic_install_dir}/include/module.modulemap"
+  cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
   prune_exported_headers "${dynamic_install_dir}/include"
 fi
 
