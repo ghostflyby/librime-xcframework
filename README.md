@@ -29,7 +29,7 @@ All consumer source code writes `import Rime`. The `Rime` module is declared onc
 
 - `Rime` — public librime headers plus the `Rime` module only. No binaries are downloaded and nothing is linked. Wrapper libraries should depend on this product.
 - `RimeDynamic` — the dynamic framework XCFramework. Xcode links and embeds it automatically for targets that declare the product.
-- `RimeDynamicStub` — a link-only handle for the dynamic framework. It ships no binaries and exposes no API; targets that declare it get `-lRimeDynamic` from the package's linker settings and no embedded framework copy. XPC services and app extensions use it to share the app's single embedded `RimeDynamic.framework` (see below).
+- `RimeDynamicStub` — a link-only handle for the dynamic framework. It ships no binaries and exposes no API; each platform carries a skeleton `RimeDynamic.framework` in the SDK style (the `tapi stubify` stub sits at the binary's position), and targets that declare the product get `-framework RimeDynamic` from the package's linker settings with no embedded framework copy. XPC services and app extensions use it to share the app's single embedded `RimeDynamic.framework` (see below).
 - `RimeStatic` — the static XCFramework with librime dependencies merged into the archive. Linked automatically.
 - `RimeSystem` — binds against a system-provided or user-replaced librime implementation via `pkg-config rime` flags without distributing any librime headers. It also declares the `Rime` module, so do not combine `RimeSystem` and `Rime` in the same package graph.
 
@@ -40,11 +40,13 @@ Wrapper libraries depend on `Rime` only. Terminal apps that use the binary artif
 Xcode embeds the `RimeDynamic` product into every target that declares it and offers no "link only" switch. Extension-like targets should declare `RimeDynamicStub` instead of `RimeDynamic`; the target is then linked against the framework by name while nothing is embedded. Wire the loader to the app's embedded copy:
 
 1. Declare `RimeDynamicStub` on the XPC/extension target (alongside `Rime` or a wrapper library that already provides it).
-2. Put the stub cargo directory on the linker search path for the matching SDK. The stubs are generated and committed by the release pipeline per platform under `Sources/RimeDynamicStub` in the package checkout; for a macOS XPC:
+2. Put the skeleton framework directory on the framework search path for the matching SDK. The skeletons are generated and committed by the release pipeline per platform under `Sources/RimeDynamicStub` in the package checkout; for a macOS XPC:
 
    ```text
-   LIBRARY_SEARCH_PATHS[sdk=macosx*] = $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/macos
+   FRAMEWORK_SEARCH_PATHS[sdk=macosx*] = $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/macos
    ```
+
+   Condition the path per SDK (`macosx*`/`iphoneos*`/`iphonesimulator*` selecting the `macos`/`ios`/`ios-simulator` skeleton) and do not use one recursive path over all platforms: the skeletons share the framework name, and the linker should only be offered the skeleton whose target triples match the platform being linked.
 
 3. Point the runpath at the app's embedded copy. For a macOS XPC service four levels up reaches the app's `Frameworks` directory:
 
@@ -52,7 +54,7 @@ Xcode embeds the `RimeDynamic` product into every target that declares it and of
    LD_RUNPATH_SEARCH_PATHS = @executable_path/../../../../Frameworks
    ```
 
-The stubs are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a stub always matches the artifacts of its tag. A mismatched stub fails loudly — at link time if the stub is older than the framework, at launch if it is newer.
+The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
 
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
