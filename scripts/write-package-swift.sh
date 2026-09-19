@@ -23,11 +23,16 @@ let package = Package(
         .iOS(.v13)
     ],
     products: [
+        .library(name: "Rime", targets: ["RimeHeaders"]),
         .library(name: "RimeStatic", targets: ["RimeStatic"]),
         .library(name: "RimeDynamic", targets: ["RimeDynamic"]),
         .library(name: "RimeSystem", targets: ["RimeSystem"])
     ],
     targets: [
+        .target(
+            name: "RimeHeaders",
+            path: "Sources/RimeHeaders"
+        ),
         .binaryTarget(
             name: "RimeStatic",
             url: "${static_artifact_url}",

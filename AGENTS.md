@@ -30,13 +30,15 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.
 - Build iOS device arm64 and combine iOS simulator arm64 and x86_64 archives into a universal simulator static library before creating the static XCFramework.
 - Package dynamic outputs as `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator before creating the dynamic XCFramework.
-- Export only the public C API headers and module maps. The static binary module is `RimeStatic`, the dynamic binary module is `RimeDynamic`, and the system-library module is `RimeSystem`.
-- Keep `RimeSystem` implementation-neutral: use `pkg-config rime` for flags and do not add a module-map `link` directive that would force one library name.
+- Package the macOS dynamic slice as a versioned deep bundle (`Versions/A` with relative symlinks and a `Versions/A` install name); keep iOS slices flat.
+- Expose a single Swift module named `Rime` from the `RimeHeaders` headers target under `Sources/RimeHeaders/include`; keep `RimeShim.h` and the pruned librime public headers committed there.
+- Ship the static and dynamic XCFrameworks without module maps so the `Rime` module is provided only by the headers target; keep the public headers inside the artifacts.
+- Keep `RimeSystem` implementation-neutral: it is a systemLibrary declaring `module Rime [system]`, uses `pkg-config rime` for flags, does not add a module-map `link` directive that would force one library name, and must not be combined with the `Rime` headers product in one graph.
 - Release artifacts should include `librime-static.xcframework.zip`, `librime-dynamic.xcframework.zip`, `LICENSE.txt`, `THIRD_PARTY_NOTICES.md`, `third-party-notices.zip`, and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.
 - Keep the repository license and binary distribution notices in sync with the release assets. The wrapper uses BSD 3-Clause, upstream `librime` is BSD 3-Clause, and vcpkg dependency copyright files should be collected into `third-party-notices.zip`.
 - Wrapper versions should use `<upstream-version>-pack.<packaging-revision>` so tags work naturally with SwiftPM version requirements.
 - In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`. When `packaging_revision` is also empty, choose the next available pack revision for manual builds; scheduled upstream checks should skip publishing if any pack release already exists for that upstream version.
-- The release workflow should generate `Package.swift` with direct `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, commit it, and tag that commit before creating the GitHub Release.
+- The release workflow should generate `Package.swift` with direct `Rime`, `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, sync the `Sources/RimeHeaders` headers from the build outputs, commit both, and tag that commit before creating the GitHub Release.
 
 ## Review
 
