@@ -152,13 +152,15 @@ create_macos_dynamic_framework() {
 }
 
 # Linker stubs let XPC and extension targets link the dynamic framework without
-# embedding it and share the app's single embedded copy; the release workflow
-# commits them under Sources/RimeDynamicStub. Generated from the same dylibs
-# that go into the release. tapi writes the tbd next to its input, so each
+# embedding it and share the app's single embedded copy. Each platform gets a
+# skeleton framework in the SDK style: the tbd sits at the binary's position
+# inside RimeDynamic.framework (deep Versions/A layout for macOS, flat for
+# iOS), and the release workflow commits the skeletons under
+# Sources/RimeDynamicStub. tapi writes the tbd next to its input, so each
 # binary is copied to scratch first to keep the framework directories clean.
 generate_linker_stubs() {
   local stubs_dir="${out_dir}/linker-stubs"
-  local platform binary
+  local platform binary tbd
 
   rm -rf "${stubs_dir}"
   for platform in macos ios ios-simulator; do
@@ -167,10 +169,18 @@ generate_linker_stubs() {
       ios) binary="${ios_device_dynamic_framework}/RimeDynamic" ;;
       ios-simulator) binary="${ios_simulator_dynamic_framework}/RimeDynamic" ;;
     esac
-    mkdir -p "${stubs_dir}/.scratch/${platform}" "${stubs_dir}/${platform}"
+    mkdir -p "${stubs_dir}/.scratch/${platform}" "${stubs_dir}/${platform}/RimeDynamic.framework"
     cp "${binary}" "${stubs_dir}/.scratch/${platform}/RimeDynamic"
     (cd "${stubs_dir}/.scratch/${platform}" && xcrun tapi stubify RimeDynamic)
-    mv "${stubs_dir}/.scratch/${platform}/RimeDynamic.tbd" "${stubs_dir}/${platform}/libRimeDynamic.tbd"
+    tbd="${stubs_dir}/.scratch/${platform}/RimeDynamic.tbd"
+    if [[ "${platform}" == "macos" ]]; then
+      mkdir -p "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/A"
+      mv "${tbd}" "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/A/RimeDynamic.tbd"
+      ln -sfn "A" "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/Current"
+      ln -sfn "Versions/Current/RimeDynamic.tbd" "${stubs_dir}/${platform}/RimeDynamic.framework/RimeDynamic"
+    else
+      mv "${tbd}" "${stubs_dir}/${platform}/RimeDynamic.framework/RimeDynamic.tbd"
+    fi
   done
   rm -rf "${stubs_dir}/.scratch"
 }

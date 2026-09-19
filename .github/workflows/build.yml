@@ -223,8 +223,9 @@ jobs:
           printf '#include "RimeShim.h"\n' > "${RUNNER_TEMP}/rime-module-smoke.c"
           xcrun clang -fmodules -fsyntax-only -I Sources/RimeHeaders/include "${RUNNER_TEMP}/rime-module-smoke.c"
           for platform in macos ios ios-simulator; do
+            rm -rf "Sources/RimeDynamicStub/${platform}"
             mkdir -p "Sources/RimeDynamicStub/${platform}"
-            cp "out/linker-stubs/${platform}/libRimeDynamic.tbd" "Sources/RimeDynamicStub/${platform}/libRimeDynamic.tbd"
+            cp -R "out/linker-stubs/${platform}/RimeDynamic.framework" "Sources/RimeDynamicStub/${platform}/RimeDynamic.framework"
           done
 
       - name: Commit and tag release manifest

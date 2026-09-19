@@ -38,7 +38,7 @@ let package = Package(
             name: "RimeDynamicStub",
             path: "Sources/RimeDynamicStub",
             linkerSettings: [
-                .linkedLibrary("RimeDynamic")
+                .linkedFramework("RimeDynamic")
             ]
         ),
         .binaryTarget(
