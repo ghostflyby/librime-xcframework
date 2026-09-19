@@ -15,9 +15,9 @@ let package = Package(
         .library(name: "RimeSystem", targets: ["RimeSystem"])
     ],
     targets: [
-        .target(
+        .systemLibrary(
             name: "RimeHeaders",
-            path: "Sources/RimeHeaders"
+            path: "Sources/RimeHeaders/include"
         ),
         .target(
             name: "RimeDynamicStub",

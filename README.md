@@ -27,7 +27,7 @@ Release tags contain a generated `Package.swift` with a headers target and binar
 
 All consumer source code writes `import Rime`. The `Rime` module is declared once, by product `Rime`'s headers target; the linking products below supply only the binary to link, not a module consumers import:
 
-- `Rime` — public librime headers plus the `Rime` module only. No binaries are downloaded and nothing is linked. Wrapper libraries should depend on this product.
+- `Rime` — public librime headers plus the `Rime` module only, shipped as a source-free systemLibrary: no binaries are downloaded, nothing is linked, and nothing is compiled on the consumer side. Wrapper libraries should depend on this product.
 - `RimeDynamic` — the dynamic framework XCFramework. Xcode links and embeds it automatically for targets that declare the product.
 - `RimeDynamicStub` — a link-only handle for the dynamic framework. It ships no binaries and exposes no API; each platform carries a skeleton `RimeDynamic.framework` in the SDK style (the `tapi stubify` stub sits at the binary's position), and targets that declare the product get `-framework RimeDynamic` from the package's linker settings with no embedded framework copy. XPC services and app extensions use it to share the app's single embedded `RimeDynamic.framework` (see below).
 - `RimeStatic` — the static XCFramework with librime dependencies merged into the archive. Linked automatically.
@@ -55,6 +55,12 @@ Xcode embeds the `RimeDynamic` product into every target that declares it and of
    ```
 
 The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
+
+### Code coverage in app-host test graphs
+
+Releases up to 1.17.0-pack.6 shipped the `Rime` headers product as a compiled Clang target. When a scheme with code coverage enabled built a test graph sharing that product between an app host and a test bundle, Xcode built the product as a dynamic framework whose link failed with `Undefined symbols: ___llvm_profile_runtime`: coverage instrumentation references the profile runtime from every translation unit (even empty or data-only ones), and the dynamic product framework link omits it.
+
+The headers product now compiles nothing on the consumer side, so coverage builds are unaffected from the release that carries this change on. For older releases, scope the scheme's coverage targets to your own targets or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
 
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
