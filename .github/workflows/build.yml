@@ -222,6 +222,10 @@ jobs:
           MODULEMAP
           printf '#include "RimeShim.h"\n' > "${RUNNER_TEMP}/rime-module-smoke.c"
           xcrun clang -fmodules -fsyntax-only -I Sources/RimeHeaders/include "${RUNNER_TEMP}/rime-module-smoke.c"
+          for platform in macos ios ios-simulator; do
+            mkdir -p "Sources/RimeDynamicStub/${platform}"
+            cp "out/linker-stubs/${platform}/libRimeDynamic.tbd" "Sources/RimeDynamicStub/${platform}/libRimeDynamic.tbd"
+          done
 
       - name: Commit and tag release manifest
         run: |
@@ -235,8 +239,8 @@ jobs:
 
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add Package.swift Sources/RimeHeaders
-            if git diff --cached --quiet -- Package.swift Sources/RimeHeaders; then
+            git add Package.swift Sources/RimeHeaders Sources/RimeDynamicStub
+            if git diff --cached --quiet -- Package.swift Sources/RimeHeaders Sources/RimeDynamicStub; then
               echo "release manifest already matches ${PACKAGING_VERSION}; tagging current commit."
             else
               git commit -m "release: ${PACKAGING_VERSION}"

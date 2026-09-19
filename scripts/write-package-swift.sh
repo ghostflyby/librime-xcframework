@@ -26,12 +26,20 @@ let package = Package(
         .library(name: "Rime", targets: ["RimeHeaders"]),
         .library(name: "RimeStatic", targets: ["RimeStatic"]),
         .library(name: "RimeDynamic", targets: ["RimeDynamic"]),
+        .library(name: "RimeDynamicStub", targets: ["RimeDynamicStub"]),
         .library(name: "RimeSystem", targets: ["RimeSystem"])
     ],
     targets: [
         .target(
             name: "RimeHeaders",
             path: "Sources/RimeHeaders"
+        ),
+        .target(
+            name: "RimeDynamicStub",
+            path: "Sources/RimeDynamicStub",
+            linkerSettings: [
+                .linkedLibrary("RimeDynamic")
+            ]
         ),
         .binaryTarget(
             name: "RimeStatic",
