@@ -28,13 +28,13 @@ let package = Package(
         ),
         .binaryTarget(
             name: "RimeStatic",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.5/librime-static.xcframework.zip",
-            checksum: "1ebdc1fc08d2df7bf06777ffb5dfb86f716501f1923dd9439086c9c73989ce03"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.6/librime-static.xcframework.zip",
+            checksum: "b1a07b2c7758c1ce3506c848da76f4eddafc188adad953bbd12758b7e5bb5110"
         ),
         .binaryTarget(
             name: "RimeDynamic",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.5/librime-dynamic.xcframework.zip",
-            checksum: "6da3df93c64e973a2ee0b075460914ff4a69c52b2a3443b583a3c3cc70c04779"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.6/librime-dynamic.xcframework.zip",
+            checksum: "09bb1bcf5f58a04fa7de54764a769a9447599a805e859ae88a570f3e7f86ba26"
         ),
         .systemLibrary(
             name: "RimeSystem",
