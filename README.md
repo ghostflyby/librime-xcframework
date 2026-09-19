@@ -56,6 +56,12 @@ Xcode embeds the `RimeDynamic` product into every target that declares it and of
 
 The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
 
+### Code coverage in app-host test graphs
+
+When a scheme with code coverage enabled builds a test graph where an app host and a test bundle share a package product, Xcode builds that product as a dynamic framework. Objects of Clang targets are then compiled with `-fprofile-instr-generate -fcoverage-mapping`, and every translation unit — even an empty or data-only one — references `___llvm_profile_runtime`. The product framework link does not include the profile runtime, so `build-for-testing` fails with `Undefined symbols: ___llvm_profile_runtime`. This is an Xcode/SwiftPM integration gap for Clang targets under coverage, not something the package can neutralize: no translation unit content escapes instrumentation, and adding profile-runtime linkage to the headers target would violate its zero-linkage contract.
+
+Scope the scheme's coverage targets to your own targets (uninstrumented package targets link cleanly) or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
+
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
 ## Local Build
