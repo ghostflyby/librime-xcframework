@@ -54,6 +54,8 @@ jobs:
     steps:
       - name: Checkout packaging repository
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Resolve upstream ref
         id: resolve-upstream
@@ -124,6 +126,8 @@ jobs:
     steps:
       - name: Checkout packaging repository
         uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Download arm64 slice
         uses: actions/download-artifact@v8

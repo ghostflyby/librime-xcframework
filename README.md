@@ -82,6 +82,7 @@ Prerequisites:
 - CMake and Ninja
 - vcpkg, with `VCPKG_ROOT` pointing at the vcpkg checkout
 - upstream `librime` source at `../librime` or `vendor/librime`
+- plugin submodules initialized: `git submodule update --init --recursive`
 
 Build and package:
 
@@ -103,6 +104,48 @@ scripts/package-xcframework.sh
 ```
 
 Outputs are written to `out/` and `dist/`.
+
+## Merged Plugins
+
+The artifacts statically merge the Rime plugins that upstream ships in its own
+release builds, so consumers get them without loading anything at runtime:
+
+- `librime-lua` (module `lua`)
+- `librime-octagram` (module `octagram`)
+- `librime-predict` (module `predict`)
+
+Plugins live in `plugins/` as git submodules pinned to explicit commits, and
+`plugins.json` is the manifest the build reads. `scripts/prepare-plugins.sh`
+copies the checkouts into the upstream source tree, applies the per-plugin
+patches listed in the manifest, and verifies each license before the merge.
+
+`librime-lua` does not vendor its own Lua: the interpreter comes from the vcpkg
+`lua` port, and the plugin is patched to use `find_package(Lua)` instead of
+pkg-config. Keeping Lua in the dependency manifest means Apple platform patches
+and version pinning stay with the other dependencies.
+
+Two upstream behaviors matter for this arrangement:
+
+- Static linking needs help. Module registration happens in static
+  initializers, and a static linker drops those object files unless something
+  references them. `patches/0001-static-plugin-module-references.patch` brings
+  in upstream's fix for exactly this (upstream commit `cbf363be`, which landed
+  after the `1.17.0` tag), so plugin modules are force-referenced by
+  `rime_declare_module_dependencies()`.
+- Plugin upgrades change candidate behavior, and `librime-octagram` was
+  distributed under GPLv3 until it was relicensed to BSD 3-Clause in July 2026.
+  Pins are therefore explicit, Dependabot proposals are reviewed rather than
+  auto-merged, and the build refuses a plugin whose license text is not the
+  expected one.
+
+Plugin revisions are recorded in the release `build-metadata.json`, and license
+texts are collected into `third-party-notices.zip` under `plugins/`.
+
+The build merges the plugin modules and their runtime dependencies, but not
+plugin *data* or tools: the `octagram` and `predict` modules ship without a
+grammar/prediction database, and the plugin data generators are not built
+(`BUILD_TOOLS=OFF`). Deploy the matching data files with your schema, as you
+would with any other Rime distribution.
 
 ## Versioning
 

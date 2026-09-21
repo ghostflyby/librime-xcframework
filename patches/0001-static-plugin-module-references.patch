@@ -1,0 +1,105 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 6a76fb7c..daecb410 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -266,7 +266,7 @@ message(STATUS "rime_plugins_libs: ${rime_plugins_deps}")
+ message(STATUS "rime_plugins_modules: ${rime_plugins_modules}")
+ set(list "")
+ foreach(mod ${rime_plugins_modules})
+-  set(list "${list},Q(${mod})")
++  string(APPEND list "(${mod})")
+ endforeach()
+ set(RIME_SETUP_EXTRA_MODULES "${list}")
+ if(BUILD_SHARED_LIBS AND BUILD_SEPARATE_LIBS AND rime_plugins_objs)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 8faa61f8..6cddc190 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -172,7 +172,6 @@ else()
+   install(TARGETS rime-static DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR})
+ endif()
+ if(DEFINED RIME_SETUP_EXTRA_MODULES)
+-  set_property(SOURCE rime/setup.cc
+-    PROPERTY COMPILE_DEFINITIONS
++  target_compile_definitions(${rime_library} PRIVATE
+     "RIME_EXTRA_MODULES=${RIME_SETUP_EXTRA_MODULES}")
+ endif()
+diff --git a/src/rime/setup.cc b/src/rime/setup.cc
+index 4c2a73b9..4e644b0e 100644
+--- a/src/rime/setup.cc
++++ b/src/rime/setup.cc
+@@ -21,9 +21,24 @@
+ 
+ namespace rime {
+ 
+-#define Q(x) #x
+-RIME_DLL RIME_MODULE_LIST(kDefaultModules, "default" RIME_EXTRA_MODULES);
+-#undef Q
++#include <boost/preprocessor/control/iif.hpp>
++#include <boost/preprocessor/seq/for_each.hpp>
++#include <boost/preprocessor/stringize.hpp>
++#include <boost/preprocessor/tuple/eat.hpp>
++#include <boost/vmd/is_empty.hpp>
++
++#define _RIME_SEQ_FOR_EACH(macro, data, seq)                   \
++  BOOST_PP_IIF(BOOST_VMD_IS_EMPTY(seq), BOOST_PP_TUPLE_EAT(3), \
++               BOOST_PP_SEQ_FOR_EACH)                          \
++  (macro, data, seq)
++
++#define _RIME_MODULE_STR(r, data, elem) , BOOST_PP_STRINGIZE(elem)
++RIME_DLL RIME_MODULE_LIST(kDefaultModules,
++                          "default" _RIME_SEQ_FOR_EACH(_RIME_MODULE_STR,
++                                                       ~,
++                                                       RIME_EXTRA_MODULES));
++#undef _RIME_MODULE_STR
++#undef _RIME_SEQ_FOR_EACH
+ RIME_DLL RIME_MODULE_LIST(kDeployerModules, "deployer");
+ RIME_MODULE_LIST(kLegacyModules, "legacy");
+ 
+diff --git a/src/rime_api.cc b/src/rime_api.cc
+index 1c0ead2a..73a9b270 100644
+--- a/src/rime_api.cc
++++ b/src/rime_api.cc
+@@ -22,17 +22,42 @@ RIME_DEPRECATED void RimeSetupLogging(const char* app_name) {
+ #if RIME_BUILD_SHARED_LIBS
+ void rime_declare_module_dependencies() {}
+ #else
++#include <boost/preprocessor/cat.hpp>
++#include <boost/preprocessor/control/iif.hpp>
++#include <boost/preprocessor/seq/for_each.hpp>
++#include <boost/preprocessor/tuple/eat.hpp>
++#include <boost/vmd/is_empty.hpp>
++
++#define _RIME_SEQ_FOR_EACH(macro, data, seq)                   \
++  BOOST_PP_IIF(BOOST_VMD_IS_EMPTY(seq), BOOST_PP_TUPLE_EAT(3), \
++               BOOST_PP_SEQ_FOR_EACH)                          \
++  (macro, data, seq)
++
+ extern void rime_require_module_core();
+ extern void rime_require_module_dict();
+ extern void rime_require_module_gears();
+ extern void rime_require_module_levers();
++
++#define _RIME_PLUGIN_DECL(r, data, elem) \
++  extern void BOOST_PP_CAT(rime_require_module_, elem)();
++#define _RIME_PLUGIN_CALL(r, data, elem) \
++  BOOST_PP_CAT(rime_require_module_, elem)();
++
++_RIME_SEQ_FOR_EACH(_RIME_PLUGIN_DECL, ~, RIME_EXTRA_MODULES)
++
+ // link to default modules explicitly when building static library.
+ void rime_declare_module_dependencies() {
+   rime_require_module_core();
+   rime_require_module_dict();
+   rime_require_module_gears();
+   rime_require_module_levers();
++  _RIME_SEQ_FOR_EACH(_RIME_PLUGIN_CALL, ~, RIME_EXTRA_MODULES)
+ }
++
++#undef _RIME_PLUGIN_DECL
++#undef _RIME_PLUGIN_CALL
++#undef _RIME_SEQ_FOR_EACH
++#undef RIME_EXTRA_MODULES
+ #endif
+ 
+ RIME_API Bool RimeRegisterModule(RimeModule* module) {

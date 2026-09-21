@@ -1,0 +1,9 @@
+[submodule "plugins/lua"]
+	path = plugins/lua
+	url = https://github.com/hchunhui/librime-lua.git
+[submodule "plugins/octagram"]
+	path = plugins/octagram
+	url = https://github.com/lotem/librime-octagram.git
+[submodule "plugins/predict"]
+	path = plugins/predict
+	url = https://github.com/rime/librime-predict.git

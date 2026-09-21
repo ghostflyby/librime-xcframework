@@ -1,0 +1,33 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 42f2ebb..9f15750 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,20 +1,14 @@
+ set(LUA_VERSION "lua" CACHE STRING "lua version")
+ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/lua5.4/lua.h")
+-  find_package(PkgConfig)
+-  if(PkgConfig_FOUND)
+-    foreach(pkg ${LUA_VERSION} lua54 lua53 lua52 luajit lua51)
+-      pkg_check_modules(LUA IMPORTED_TARGET GLOBAL ${pkg})
+-      if(LUA_FOUND)
+-	break()
+-      endif()
+-    endforeach()
+-  endif()
+-  if(LUA_FOUND)
+-    set(LUA_TARGET PkgConfig::LUA)
+-    include_directories(${LUA_INCLUDE_DIRS})
+-  else()
+-    message(FATAL_ERROR "Lua not found, consider using `bash action-install.sh` to download.")
++  find_package(Lua REQUIRED)
++  # vcpkg's Lua wrapper hands out a directory-scoped imported target, while the
++  # plugin deps are consumed from sibling directories (src/), so promote it to
++  # global scope. A plain CMake FindLua result is already a global path.
++  if(TARGET unofficial::lua::lua)
++    set_target_properties(unofficial::lua::lua PROPERTIES IMPORTED_GLOBAL TRUE)
+   endif()
++  set(LUA_TARGET ${LUA_LIBRARIES})
++  include_directories(${LUA_INCLUDE_DIR})
+ else()
+   message(STATUS "Using in-tree lua source")
+   include_directories(thirdparty/lua5.4)

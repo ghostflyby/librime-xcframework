@@ -118,6 +118,15 @@ fi
 
 "${script_dir}/apply-patches.sh" "${source_work_dir}"
 
+export RIME_PLUGINS="$("${script_dir}/prepare-plugins.sh" "${source_work_dir}")"
+
+plugin_modules=(${RIME_PLUGINS})
+if [[ ${#plugin_modules[@]} -eq 0 ]]; then
+  printf 'no plugins were prepared; the artifacts are expected to merge the plugins from plugins.json\n' >&2
+  exit 1
+fi
+printf 'merging plugin modules: %s\n' "${plugin_modules[*]}"
+
 if [[ ! -f "${source_work_dir}/CMakeLists.txt" ]]; then
   printf 'selected source ref does not contain CMakeLists.txt: %s\n' "${source_work_dir}" >&2
   exit 1
@@ -225,6 +234,38 @@ fi
 
 cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 prune_exported_headers "${static_install_dir}/include"
+
+# Static linking drops module registration objects unless something references
+# them, and a dropped plugin leaves an artifact that still looks complete. Fail
+# loudly instead of shipping a plugin-less library.
+verify_merged_plugins() {
+  local library="$1"
+  local missing=() module symbols
+
+  if [[ ${#plugin_modules[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  symbols="$(nm -gU "${library}" 2>/dev/null || true)"
+  for module in "${plugin_modules[@]}"; do
+    # Match the C++ mangled forms, either plain or inside the rime namespace:
+    # __Z<len>rime_require_module_<module>v / __ZN4rime<len>rime_require_module_<module>Ev
+    # Use a here-string rather than a pipe: `grep -q` exits on the first match,
+    # and under `pipefail` the resulting SIGPIPE on the writer would fail the
+    # whole pipeline and report a present module as missing.
+    if ! grep -qE "rime_require_module_${module}(v|Ev)$" <<< "${symbols}"; then
+      missing+=("${module}")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf 'librime was built without merged plugin module(s): %s\n' "${missing[*]}" >&2
+    printf 'expected rime_require_module_* symbols in %s\n' "${library}" >&2
+    exit 1
+  fi
+  printf 'verified merged plugin modules in %s: %s\n' "${library}" "${plugin_modules[*]}"
+}
+
+verify_merged_plugins "${static_archive}"
 
 if [[ "${build_dynamic}" -eq 1 ]]; then
   configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON

@@ -1,0 +1,36 @@
+{
+  "comment": "Plugins statically merged into librime for the XCFramework artifacts. The pinned revisions are the git submodule commits recorded in the repository index (.gitmodules); this manifest only describes how to build and verify each plugin. The build reads it to set RIME_PLUGINS, apply per-plugin patches, verify licenses, and report metadata.",
+  "plugins": [
+    {
+      "name": "lua",
+      "module": "lua",
+      "path": "plugins/lua",
+      "url": "https://github.com/hchunhui/librime-lua.git",
+      "homepage": "https://github.com/hchunhui/librime-lua",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "license_marker": "Copyright (c) 2021, librime-lua Developers",
+      "patch": "patches/plugins/lua/0001-use-cmake-find-package-lua.patch"
+    },
+    {
+      "name": "octagram",
+      "module": "octagram",
+      "path": "plugins/octagram",
+      "url": "https://github.com/lotem/librime-octagram.git",
+      "homepage": "https://github.com/lotem/librime-octagram",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "license_marker": "Redistribution and use in source and binary forms"
+    },
+    {
+      "name": "predict",
+      "module": "predict",
+      "path": "plugins/predict",
+      "url": "https://github.com/rime/librime-predict.git",
+      "homepage": "https://github.com/rime/librime-predict",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "license_marker": "Redistribution and use in source and binary forms"
+    }
+  ]
+}
