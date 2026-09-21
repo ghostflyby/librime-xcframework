@@ -41,6 +41,25 @@ All consumer source code writes `import Rime`. The `Rime` module is declared onc
 
 Wrapper libraries depend on `Rime` only. Terminal apps that use the binary artifacts depend on `Rime` plus exactly one of `RimeDynamic`/`RimeStatic` (linked automatically, or manually with `pkg-config rime` flags). Apps binding a system librime depend on `RimeSystem` alone — `RimeSystem` replaces `Rime` in the graph, never combines with it.
 
+### Swift names
+
+librime ships two API flavors and this package exports the `stdbool` one, so in C every affected type carries a `_stdbool` suffix (`RimeApi_stdbool`, `RimeMenu_stdbool`, …) and the entry point is `rime_get_api_stdbool`. That suffix is an artifact of flavor disambiguation and has no meaning to a Swift caller.
+
+`Sources/RimeHeaders/include/Rime.apinotes` maps those names back, so Swift sees the plain spellings:
+
+| Swift | C symbol it still calls |
+|---|---|
+| `RimeApi`, `RimeMenu`, `RimeContext`, `RimeStatus`, `RimeLeversApi` | the `_stdbool` structs |
+| `rime_get_api` | `rime_get_api_stdbool` |
+
+This is a **Swift-side breaking rename**: the suffixed spellings no longer resolve, and the compiler reports `has been renamed to …`. Existing call sites need the un-suffixed name (the fix-it suggests it); a signature that names `RimeApi_stdbool` explicitly needs a manual look.
+
+Notes on the mechanism, because two failure modes are silent:
+
+- API notes live outside the headers, so the annotations cannot be overwritten by the release pipeline's header sync — the file is installed alongside the headers and travels with the artifacts.
+- A `Functions` entry must spell `SwiftName` with parentheses (`'rime_get_api()'`); without them the importer ignores the entry without a diagnostic. `scripts/verify-swift-names.sh` compiles a probe that fails if the plain names stop resolving, if the suffixed names still resolve, or if the two copies of the file drift apart. The release workflow runs it right after syncing headers.
+- `RimeSystem` carries its own copy of the same file, since its headers come from a system librime rather than this repository; the probe keeps the two in sync.
+
 ### Linking without embedding (XPC services and app extensions)
 
 Xcode embeds the `RimeDynamic` product into every target that declares it and offers no "link only" switch. Extension-like targets should declare `RimeDynamicStub` instead of `RimeDynamic`; the target is then linked against the framework by name while nothing is embedded. Wire the loader to the app's embedded copy:

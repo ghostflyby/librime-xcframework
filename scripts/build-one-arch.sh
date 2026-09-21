@@ -184,6 +184,19 @@ prune_exported_headers() {
   rm -f "${include_dir}/rime_api_deprecated.h"
 }
 
+# Copy the files this repository owns into the exported include directory, so
+# they travel with the build output. The release pipeline syncs that directory
+# into Sources/RimeHeaders/include/, and because that sync deletes files absent
+# from the source it would otherwise remove them from the package.
+install_wrapper_headers() {
+  local include_dir="$1"
+
+  cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" \
+    "${include_dir}/RimeShim.h"
+  cp "${repo_root}/Sources/RimeHeaders/include/Rime.apinotes" \
+    "${include_dir}/Rime.apinotes"
+}
+
 # Public headers of the plugins carried in this repository. They live outside
 # upstream's src/ tree, which is what its install rule globs, so copy them into
 # the exported include directory, where the release pipeline picks them up for
@@ -301,7 +314,7 @@ else
   printf 'warning: no vcpkg dependency archives found to merge\n' >&2
 fi
 
-cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
+install_wrapper_headers "${static_install_dir}/include"
 prune_exported_headers "${static_install_dir}/include"
 install_plugin_headers "${static_install_dir}/include"
 
@@ -346,7 +359,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
     exit 1
   fi
 
-  cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
+  install_wrapper_headers "${dynamic_install_dir}/include"
   prune_exported_headers "${dynamic_install_dir}/include"
   install_plugin_headers "${dynamic_install_dir}/include"
 fi

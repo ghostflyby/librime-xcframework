@@ -231,6 +231,10 @@ jobs:
           MODULEMAP
           printf '#include "RimeShim.h"\n' > "${RUNNER_TEMP}/rime-module-smoke.c"
           xcrun clang -fmodules -fsyntax-only -I Sources/RimeHeaders/include "${RUNNER_TEMP}/rime-module-smoke.c"
+          # The header sync above deletes files absent from the build output, so
+          # this also proves Rime.apinotes travelled with the artifacts and that
+          # the un-suffixed Swift names still resolve.
+          scripts/verify-swift-names.sh
           for platform in macos ios ios-simulator; do
             rm -rf "Sources/RimeDynamicStub/${platform}"
             mkdir -p "Sources/RimeDynamicStub/${platform}"
