@@ -1,6 +1,13 @@
 {
-  "comment": "Plugins statically merged into librime for the XCFramework artifacts. The pinned revisions are the git submodule commits recorded in the repository index (.gitmodules); this manifest only describes how to build and verify each plugin. The build reads it to set RIME_PLUGINS, apply per-plugin patches, verify licenses, and report metadata.",
+  "comment": "Plugins statically merged into librime for the XCFramework artifacts. Entries without \"local\" are git submodules whose pinned revisions are the gitlinks recorded in the repository index (.gitmodules); this manifest only describes how to build and verify each one. Entries with \"local\": true live in this repository and are covered by its own LICENSE. The build reads this file to set RIME_PLUGINS, apply per-plugin patches, verify licenses, and report metadata.",
   "plugins": [
+    {
+      "name": "logsink",
+      "module": "logsink",
+      "path": "plugins/logsink",
+      "local": true,
+      "license": "BSD-3-Clause"
+    },
     {
       "name": "lua",
       "module": "lua",

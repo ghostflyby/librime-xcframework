@@ -120,15 +120,62 @@ release builds, so consumers get them without loading anything at runtime:
 - `librime-octagram` (module `octagram`)
 - `librime-predict` (module `predict`)
 
-Plugins live in `plugins/` as git submodules pinned to explicit commits, and
-`plugins.json` is the manifest the build reads. `scripts/prepare-plugins.sh`
-copies the checkouts into the upstream source tree, applies the per-plugin
-patches listed in the manifest, and verifies each license before the merge.
+They also merge one plugin that belongs to this repository rather than upstream:
+
+- `logsink` — forwards librime's diagnostics to host logging systems
+  (`plugins/logsink`)
+
+Plugins live in `plugins/`: the three upstream ones are git submodules pinned to
+explicit commits, and `logsink` is a source directory of this repository (marked
+`"local": true` in the manifest). `plugins.json` is the manifest the build
+reads. `scripts/prepare-plugins.sh` copies each plugin into the upstream source
+tree, applies the per-plugin patches listed in the manifest, and verifies the
+license of every plugin that comes from outside this repository before merging
+it.
 
 `librime-lua` does not vendor its own Lua: the interpreter comes from the vcpkg
 `lua` port, and the plugin is patched to use `find_package(Lua)` instead of
 pkg-config. Keeping Lua in the dependency manifest means Apple platform patches
 and version pinning stay with the other dependencies.
+
+### Logging: the `logsink` plugin
+
+librime logs through glog, whose symbols stay hidden inside the dynamic
+framework — so a host cannot register a glog sink itself when it links
+`RimeDynamic`. The `logsink` plugin is compiled into librime for exactly that
+reason, and exposes a plain C callback instead (`rime_logsink_api.h`, shipped
+with the other public headers):
+
+```c
+#include <rime_api.h>
+#include <rime_logsink_api.h>
+
+RimeModule* module = rime->find_module("logsink");
+RimeLogSinkApi* sink = (RimeLogSinkApi*)module->get_api();
+sink->add_sink(my_context, my_callback);   // every record, into your log system
+```
+
+The interface is deliberately destination-neutral: it hands you the record
+(severity, message, source location, timestamp) and nothing else, so the host
+decides what to write, where, and how much of it. A host that wants
+`os.Logger` builds that on top of the callback in a few lines, with its own
+subsystem, category and privacy choices.
+
+Call it after `rime->setup()`/`initialize()`, which is where librime initializes
+glog. Behaviour worth knowing:
+
+- Sinks are **additive**. glog dispatches to every registered sink, so adding one
+  does not replace another, and glog's own file and stderr logging keeps working
+  unless you turn it off (`disable_file_logging`, `set_stderr_severity` — both
+  process-wide, because glog's state is global; the latter is how you avoid
+  ERROR records appearing twice when your log system also collects stderr).
+- Nothing is registered by default: a host that does not ask for a sink gets the
+  same logging behaviour as before.
+- The callback runs on the logging thread while glog holds a lock, may be called
+  concurrently from several threads, and must return promptly. Do not call back
+  into librime logging from it (that deadlocks).
+- Records can contain user input (typed keys, dictionary entries). Redaction and
+  retention are the callback's responsibility, not this module's.
 
 Two upstream behaviors matter for this arrangement:
 

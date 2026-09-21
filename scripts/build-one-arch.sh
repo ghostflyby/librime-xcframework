@@ -184,6 +184,52 @@ prune_exported_headers() {
   rm -f "${include_dir}/rime_api_deprecated.h"
 }
 
+# Public headers of the plugins carried in this repository. They live outside
+# upstream's src/ tree, which is what its install rule globs, so copy them into
+# the exported include directory, where the release pipeline picks them up for
+# Sources/RimeHeaders.
+#
+# Driven by the manifest rather than by globbing plugins/: a directory that is
+# not in the manifest must not publish headers, and an accidental basename
+# collision (including with a librime header) must fail loudly instead of
+# silently overwriting.
+install_plugin_headers() {
+  local include_dir="$1"
+  local header header_name destination
+
+  while IFS= read -r -d '' header; do
+    header_name="$(basename "${header}")"
+    destination="${include_dir}/${header_name}"
+    if [[ -e "${destination}" ]]; then
+      printf 'plugin header %s would overwrite an exported header: %s\n' \
+        "${header}" "${destination}" >&2
+      exit 1
+    fi
+    cp "${header}" "${destination}"
+  done < <(plugin_public_headers)
+}
+
+# Prints the public headers of the manifest's local plugins, NUL-delimited.
+plugin_public_headers() {
+  local manifest_path="${PLUGINS_MANIFEST:-${repo_root}/plugins.json}"
+
+  [[ -f "${manifest_path}" ]] || return 0
+
+  python3 - "${manifest_path}" "${repo_root}" <<'PY'
+import json, os, sys
+manifest, repo_root = sys.argv[1], sys.argv[2]
+for plugin in json.load(open(manifest))["plugins"]:
+    if not plugin.get("local"):
+        continue
+    include_dir = os.path.join(repo_root, plugin["path"], "include")
+    if not os.path.isdir(include_dir):
+        continue
+    for name in sorted(os.listdir(include_dir)):
+        if name.endswith(".h"):
+            sys.stdout.write(os.path.join(include_dir, name) + "\0")
+PY
+}
+
 collect_vcpkg_notices() {
   local notices_dir="$1"
   local share_dir copyright_file port_name destination
@@ -257,6 +303,7 @@ fi
 
 cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 prune_exported_headers "${static_install_dir}/include"
+install_plugin_headers "${static_install_dir}/include"
 
 # Static linking drops module registration objects unless something references
 # them, and a dropped plugin leaves an artifact that still looks complete. Fail
@@ -301,6 +348,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
 
   cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${dynamic_install_dir}/include/RimeShim.h"
   prune_exported_headers "${dynamic_install_dir}/include"
+  install_plugin_headers "${dynamic_install_dir}/include"
 fi
 
 collect_vcpkg_notices "${install_dir}/notices"

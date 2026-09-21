@@ -51,6 +51,7 @@ for plugin in data["plugins"]:
         plugin.get("license_file", "LICENSE"),
         plugin.get("license_marker", ""),
         plugin.get("patch", ""),
+        "1" if plugin.get("local") else "0",
     ]
     print("\x1f".join(fields))
 PY
@@ -68,33 +69,41 @@ fi
 plugin_names=()
 module_names=()
 
-while IFS=$'\x1f' read -r name module path license license_file license_marker patch; do
+while IFS=$'\x1f' read -r name module path license license_file license_marker patch local; do
   plugin_src="${repo_root}/${path}"
   plugin_dst="${source_dir}/plugins/${name}"
 
   if [[ ! -d "${plugin_src}" ]]; then
-    printf 'plugin checkout missing: %s (run: git submodule update --init --recursive)\n' "${plugin_src}" >&2
+    if [[ "${local}" == "1" ]]; then
+      printf '[%s] plugin source missing: %s\n' "${name}" "${plugin_src}" >&2
+    else
+      printf 'plugin checkout missing: %s (run: git submodule update --init --recursive)\n' "${plugin_src}" >&2
+    fi
     exit 1
   fi
 
-  if [[ ! -f "${plugin_src}/${license_file}" ]]; then
-    printf '[%s] license file missing: %s\n' "${name}" "${plugin_src}/${license_file}" >&2
-    exit 1
-  fi
+  # Local plugins are this repository's own sources, so the wrapper LICENSE
+  # covers them and there is no upstream pin whose license could drift.
+  if [[ "${local}" != "1" ]]; then
+    if [[ ! -f "${plugin_src}/${license_file}" ]]; then
+      printf '[%s] license file missing: %s\n' "${name}" "${plugin_src}/${license_file}" >&2
+      exit 1
+    fi
 
-  # librime-octagram was GPLv3 until its 2026-07 relicense, so a stale pin
-  # silently brings copyleft into the artifacts. Refuse anything whose license
-  # text is not the expected one.
-  if [[ -z "${license_marker}" ]]; then
-    printf '[%s] manifest declares no license_marker, so the %s license cannot be verified\n' \
-      "${name}" "${license}" >&2
-    exit 1
-  fi
-  if ! grep -qF "${license_marker}" "${plugin_src}/${license_file}"; then
-    printf '[%s] expected %s license text in %s but did not find: %s\n' \
-      "${name}" "${license}" "${license_file}" "${license_marker}" >&2
-    printf '[%s] refusing to build: a stale pin would redistribute the wrong license\n' "${name}" >&2
-    exit 1
+    # librime-octagram was GPLv3 until its 2026-07 relicense, so a stale pin
+    # silently brings copyleft into the artifacts. Refuse anything whose license
+    # text is not the expected one.
+    if [[ -z "${license_marker}" ]]; then
+      printf '[%s] manifest declares no license_marker, so the %s license cannot be verified\n' \
+        "${name}" "${license}" >&2
+      exit 1
+    fi
+    if ! grep -qF "${license_marker}" "${plugin_src}/${license_file}"; then
+      printf '[%s] expected %s license text in %s but did not find: %s\n' \
+        "${name}" "${license}" "${license_file}" "${license_marker}" >&2
+      printf '[%s] refusing to build: a stale pin would redistribute the wrong license\n' "${name}" >&2
+      exit 1
+    fi
   fi
 
   rm -rf "${plugin_dst}"

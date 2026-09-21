@@ -23,7 +23,12 @@ fi
 
 mkdir -p "${dest_dir}/plugins"
 
-while IFS=$'\x1f' read -r name license license_file license_marker; do
+while IFS=$'\x1f' read -r name license license_file license_marker local; do
+  # Local plugins are this repository's own sources and are covered by the
+  # wrapper LICENSE that ships as LICENSE.txt.
+  if [[ "${local}" == "1" ]]; then
+    continue
+  fi
   license_src="${repo_root}/plugins/${name}/${license_file}"
   if [[ ! -f "${license_src}" ]]; then
     printf '[%s] license file missing: %s\n' "${name}" "${license_src}" >&2
@@ -46,6 +51,7 @@ for plugin in data["plugins"]:
         plugin["license"],
         plugin.get("license_file", "LICENSE"),
         plugin.get("license_marker", ""),
+        "1" if plugin.get("local") else "0",
     ]
     print("\x1f".join(fields))
 PY
