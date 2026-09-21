@@ -124,6 +124,36 @@ fi
 
 printf 'logsink enum probe passed: severities and thresholds are Swift enums\n'
 
+# The header must also be clean for plain C/C++ consumers compiled with a
+# pedantic standard, which is where an unguarded Clang-only attribute (or an
+# unmarked C23 fixed underlying type) shows up as a warning. GCC does not know
+# swift_name/enum_extensibility at all, so this is the regression guard for the
+# __has_attribute wiring.
+cat > "${scratch}/c_consumer.c" <<'C'
+#include <rime_logsink_api.h>
+int main(void) {
+  rime_logsink_severity severity = RIME_LOGSINK_WARNING;
+  rime_logsink_threshold threshold = RIME_LOGSINK_AT_ERROR;
+  return (int)(severity + threshold);
+}
+C
+
+if ! xcrun clang -std=c99 -pedantic-errors -fsyntax-only -I "${include_dir}" \
+    "${scratch}/c_consumer.c" 2> "${scratch}/c_consumer.log"; then
+  printf 'C consumer does not compile cleanly under -std=c99 -pedantic-errors:\n' >&2
+  sed 's/^/  /' "${scratch}/c_consumer.log" >&2
+  exit 1
+fi
+
+if ! xcrun clang++ -std=c++17 -pedantic-errors -x c++ -fsyntax-only \
+    -I "${include_dir}" "${scratch}/c_consumer.c" 2> "${scratch}/cpp.log"; then
+  printf 'C++ consumer does not compile cleanly under -pedantic-errors:\n' >&2
+  sed 's/^/  /' "${scratch}/cpp.log" >&2
+  exit 1
+fi
+
+printf 'C/C++ pedantic probe passed: header is warning-free for plain consumers\n'
+
 # RimeSystem declares the same module for a system-provided librime, so it needs
 # the same notes. Compare rather than duplicating the probe: the two files must
 # not drift.

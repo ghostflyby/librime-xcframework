@@ -61,6 +61,37 @@
 
 #include "rime_api.h"  // for RimeCustomApi / RimeModule
 
+// swift_name and enum_extensibility are Clang attributes; GCC and other
+// compilers do not know them and would warn "attribute directive ignored" under
+// -Wattributes. Both are purely a Swift-facing annotation layer, so compiling
+// them away costs C and C++ consumers nothing.
+#if defined(__has_attribute)
+#  if __has_attribute(swift_name)
+#    define RIME_LOGSINK_SWIFT_NAME(x) __attribute__((swift_name(x)))
+#  else
+#    define RIME_LOGSINK_SWIFT_NAME(x)
+#  endif
+#  if __has_attribute(enum_extensibility)
+#    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x) \
+      __attribute__((enum_extensibility(x)))
+#  else
+#    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x)
+#  endif
+#else
+#  define RIME_LOGSINK_SWIFT_NAME(x)
+#  define RIME_LOGSINK_ENUM_EXTENSIBILITY(x)
+#endif
+
+// The fixed underlying type below is standard in C23 and in C++11 onwards, but
+// an extension in earlier C modes. `__extension__` suppresses the resulting
+// diagnostic there; it is a GCC/Clang keyword, so any other compiler gets an
+// empty expansion rather than a syntax error.
+#if defined(__GNUC__) || defined(__clang__)
+#  define RIME_LOGSINK_EXTENSION __extension__
+#else
+#  define RIME_LOGSINK_EXTENSION
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -69,32 +100,38 @@ extern "C" {
 // and used as an index directly. The underlying type is a fixed-width one so
 // the ABI is pinned to 4 bytes on every platform rather than to whatever the
 // compiler derives for the current value set.
-typedef enum __attribute__((enum_extensibility(closed),
-                            swift_name("RimeLogSinkSeverity"))) rime_logsink_severity
-    : uint32_t {
-  RIME_LOGSINK_INFO __attribute__((swift_name("info"))) = 0,
-  RIME_LOGSINK_WARNING __attribute__((swift_name("warning"))) = 1,
-  RIME_LOGSINK_ERROR __attribute__((swift_name("error"))) = 2,
-  RIME_LOGSINK_FATAL __attribute__((swift_name("fatal"))) = 3,
+//
+// __extension__ marks the fixed underlying type as a deliberate extension: it
+// is C23 syntax, so without this a -pedantic build in C99/C11 mode warns
+// (-Wc23-extensions). The marker only silences that diagnostic - the
+// representation, the values, and the Swift import are unchanged.
+RIME_LOGSINK_EXTENSION typedef enum
+    RIME_LOGSINK_SWIFT_NAME("RimeLogSinkSeverity")
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_severity : uint32_t {
+  RIME_LOGSINK_INFO RIME_LOGSINK_SWIFT_NAME("info") = 0,
+  RIME_LOGSINK_WARNING RIME_LOGSINK_SWIFT_NAME("warning") = 1,
+  RIME_LOGSINK_ERROR RIME_LOGSINK_SWIFT_NAME("error") = 2,
+  RIME_LOGSINK_FATAL RIME_LOGSINK_SWIFT_NAME("fatal") = 3,
 } rime_logsink_severity;
 
 // Threshold for an output: the lowest severity it will emit. Distinct from
 // rime_logsink_severity because "off" is a state an output can be in and a
 // record can never be. The numeric values are offset by one from the severity
 // values on purpose - do not cast between the two types.
-typedef enum __attribute__((enum_extensibility(closed),
-                            swift_name("RimeLogSinkThreshold"))) rime_logsink_threshold
-    : uint32_t {
+// __extension__ here for the same reason as above.
+RIME_LOGSINK_EXTENSION typedef enum
+    RIME_LOGSINK_SWIFT_NAME("RimeLogSinkThreshold")
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_threshold : uint32_t {
   // Emit nothing at this output, whatever the severity.
-  RIME_LOGSINK_SILENT __attribute__((swift_name("silent"))) = 0,
+  RIME_LOGSINK_SILENT RIME_LOGSINK_SWIFT_NAME("silent") = 0,
   // Emit this severity and above. In C the AT_ prefix is required because
   // enumerators share one namespace, and it doubles as a reminder that a
   // threshold is "at this level and above"; Swift cases are namespaced by their
   // type, so there the names are simply .info/.warning/.error/.fatal.
-  RIME_LOGSINK_AT_INFO __attribute__((swift_name("info"))) = 1,
-  RIME_LOGSINK_AT_WARNING __attribute__((swift_name("warning"))) = 2,
-  RIME_LOGSINK_AT_ERROR __attribute__((swift_name("error"))) = 3,
-  RIME_LOGSINK_AT_FATAL __attribute__((swift_name("fatal"))) = 4,
+  RIME_LOGSINK_AT_INFO RIME_LOGSINK_SWIFT_NAME("info") = 1,
+  RIME_LOGSINK_AT_WARNING RIME_LOGSINK_SWIFT_NAME("warning") = 2,
+  RIME_LOGSINK_AT_ERROR RIME_LOGSINK_SWIFT_NAME("error") = 3,
+  RIME_LOGSINK_AT_FATAL RIME_LOGSINK_SWIFT_NAME("fatal") = 4,
 } rime_logsink_threshold;
 
 // One log record. Pointers are valid only for the duration of the callback;
