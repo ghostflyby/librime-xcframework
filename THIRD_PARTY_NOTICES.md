@@ -15,9 +15,10 @@ Release assets include:
 - `LICENSE.txt`: the license for this packaging wrapper.
 - `THIRD_PARTY_NOTICES.md`: this overview, the upstream `librime` notice, and
   the notices for the Rime plugins merged into librime.
-- `third-party-notices.zip`: full license texts for the bundled third-party
-  dependencies (vcpkg ports under `vcpkg/`) and for the merged Rime plugins
-  (under `plugins/`).
+- `third-party-notices.zip`: full license texts for everything the binaries
+  statically contain — vcpkg ports under `vcpkg/`, librime's own bundled
+  header-only libraries under `librime/`, and the merged Rime plugins under
+  `plugins/`.
 
 ## Upstream librime
 

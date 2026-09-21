@@ -189,7 +189,7 @@ collect_vcpkg_notices() {
   local share_dir copyright_file port_name destination
 
   rm -rf "${notices_dir}"
-  mkdir -p "${notices_dir}/vcpkg"
+  mkdir -p "${notices_dir}/vcpkg" "${notices_dir}/librime"
 
   for share_dir in "${static_build_dir}/vcpkg_installed/${triplet}/share" "${vcpkg_root}/installed/${triplet}/share"; do
     if [[ ! -d "${share_dir}" ]]; then
@@ -204,6 +204,29 @@ collect_vcpkg_notices() {
       fi
     done < <(find "${share_dir}" -mindepth 2 -maxdepth 2 -type f -name copyright -print0)
   done
+
+  collect_librime_bundled_notices "${notices_dir}/librime"
+}
+
+# Upstream librime compiles in two header-only libraries whose licenses are not
+# installed by upstream's CMake rules and are not vcpkg ports. Collect them from
+# the upstream source tree here, where it exists, so they travel with the slice
+# artifacts the same way the vcpkg notices do.
+collect_librime_bundled_notices() {
+  local destination_dir="$1"
+
+  if [[ -f "${source_work_dir}/include/COPYING.darts-clone" ]]; then
+    cp "${source_work_dir}/include/COPYING.darts-clone" "${destination_dir}/darts-clone.txt"
+  else
+    printf 'warning: darts-clone license text not found for the notices bundle\n' >&2
+  fi
+
+  if [[ -f "${source_work_dir}/include/utf8.h" ]]; then
+    sed -n '1,/^ \*\/$/p' "${source_work_dir}/include/utf8.h" \
+      | sed '1d;$d' > "${destination_dir}/utf8-cpp.txt"
+  else
+    printf 'warning: utf8-cpp license text not found for the notices bundle\n' >&2
+  fi
 }
 
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF

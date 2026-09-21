@@ -192,7 +192,7 @@ copy_distribution_notices() {
   cp "${repo_root}/LICENSE" "${license_output_path}"
   cp "${repo_root}/THIRD_PARTY_NOTICES.md" "${third_party_notice_output_path}"
 
-  mkdir -p "${third_party_notice_bundle_path}/vcpkg"
+  mkdir -p "${third_party_notice_bundle_path}/vcpkg" "${third_party_notice_bundle_path}/librime"
   cat > "${notices_readme_path}" <<'README'
 # Third-Party Dependency Notices
 
@@ -213,39 +213,25 @@ README
     fi
   done < <(find "${out_dir}" -path '*/notices/vcpkg/*.txt' -type f -print0)
 
-  "${script_dir}/collect-plugin-notices.sh" "${third_party_notice_bundle_path}"
-  collect_librime_bundled_notices
-}
-
-# Upstream librime compiles in two header-only libraries whose licenses are not
-# installed by upstream's CMake rules and are not vcpkg ports, so collect them
-# from the source tree that was actually built.
-collect_librime_bundled_notices() {
-  local bundled_dir="${third_party_notice_bundle_path}/librime"
-  local source_dir
-  source_dir="${UPSTREAM_SOURCE_DIR:-}"
-  if [[ -z "${source_dir}" ]]; then
-    if [[ -d "${repo_root}/vendor/librime" ]]; then
-      source_dir="${repo_root}/vendor/librime"
-    elif [[ -d "${repo_root}/../librime" ]]; then
-      source_dir="${repo_root}/../librime"
+  while IFS= read -r -d '' notice_file; do
+    name="$(basename "${notice_file}" .txt)"
+    destination="${third_party_notice_bundle_path}/librime/${name}.txt"
+    if [[ ! -f "${destination}" ]]; then
+      cp "${notice_file}" "${destination}"
     fi
-  fi
+  done < <(find "${out_dir}" -path '*/notices/librime/*.txt' -type f -print0)
 
-  mkdir -p "${bundled_dir}"
+  "${script_dir}/collect-plugin-notices.sh" "${third_party_notice_bundle_path}"
 
-  if [[ -n "${source_dir}" && -f "${source_dir}/include/COPYING.darts-clone" ]]; then
-    cp "${source_dir}/include/COPYING.darts-clone" "${bundled_dir}/darts-clone.txt"
-  else
-    printf 'warning: darts-clone license text not found for the notices bundle\n' >&2
-  fi
-
-  if [[ -n "${source_dir}" && -f "${source_dir}/include/utf8.h" ]]; then
-    sed -n '1,/^ \*\/$/p' "${source_dir}/include/utf8.h" \
-      | sed '1d;$d' > "${bundled_dir}/utf8-cpp.txt"
-  else
-    printf 'warning: utf8-cpp license text not found for the notices bundle\n' >&2
-  fi
+  # Every slice ships its own notices/, so a missing category means the bundle
+  # would silently under-report what the binaries contain.
+  local category
+  for category in vcpkg librime plugins; do
+    if [[ -z "$(find "${third_party_notice_bundle_path}/${category}" -type f -print -quit 2>/dev/null)" ]]; then
+      printf 'third-party notices bundle has no %s license texts; was a slice built?\n' "${category}" >&2
+      exit 1
+    fi
+  done
 }
 
 rsync -a --delete "${arm64_static_headers}/" "${static_universal_headers}/"
