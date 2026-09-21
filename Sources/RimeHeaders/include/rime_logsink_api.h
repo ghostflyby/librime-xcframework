@@ -13,6 +13,42 @@
  * headers, and without this library choosing a destination or a privacy policy
  * on the host's behalf.
  *
+ * Taking over completely (all verified against the shipped artifacts):
+ *
+ *   traits.modules       = the modules to load, including "logsink";
+ *   traits.log_dir       = "";   // librime's own switch: never write files
+ *   traits.min_log_level = 0;    // filtering here also drops records from
+ *                                // sinks, so leave it at INFO
+ *   rime->setup(&traits);
+ *   api->set_stderr_threshold(RIME_LOGSINK_SILENT);   // after setup(), see below
+ *   api->add_sink(context, callback);
+ *   rime->initialize(&traits);
+ *
+ * That combination produced no files, no stderr output, and all 60 records
+ * delivered to the sink in a session that loaded the default modules plus the
+ * lua, octagram and predict plugins.
+ *
+ * Three things to know:
+ *
+ *  - The sink API is available as soon as the library is loaded, before
+ *    rime->setup(): module registration runs from a constructor. Install early
+ *    to capture the component-registration logging that setup() and
+ *    initialize() produce. (Static linking is the exception: the host's
+ *    earliest reliable call site is main(), because constructor order follows
+ *    link order. Records emitted before that are structurally uncapturable by
+ *    any in-process sink; in the current librime that window is empty, as its
+ *    module constructors only register and do not log.)
+ *
+ *  - `traits.log_dir = ""` does two things: it stops file logging, and it
+ *    raises glog's stderr threshold to INFO. Call set_stderr_threshold AFTER
+ *    setup() so your value is not overwritten. Note also that log_dir is
+ *    one-way at the glog level - there is no supported way to re-enable file
+ *    logging afterwards, which is why this API offers no counterpart.
+ *
+ *  - SILENT is not "severity zero". Thresholds live in a separate enum whose
+ *    values are deliberately offset from the severity values, because a
+ *    threshold needs one more state ("off") than a record can have.
+ *
  * One flavor only: plain stdbool `bool`, no RIME_FLAVORED variant. This header
  * is C and C++ compatible and is safe to import from Swift.
  */
@@ -25,22 +61,81 @@
 
 #include "rime_api.h"  // for RimeCustomApi / RimeModule
 
+// swift_name and enum_extensibility are Clang attributes. An unrecognized
+// attribute is semantically ignored, but GCC still warns about it
+// ("'swift_name' attribute directive ignored [-Wattributes]") with no warning
+// flag needed, so a bare use would make every GCC build noisy. Both are purely
+// a Swift-facing annotation layer, so compiling them away costs C and C++
+// consumers nothing.
+//
+// The shape follows Apple's own headers (CFBase.h, CFAvailability.h): guard on
+// __has_attribute, fall back to an empty expansion, and let a definition from
+// outside win via #ifndef. There is no compiler-provided SWIFT_NAME macro to
+// reuse - each framework defines its own (CF_SWIFT_NAME, NS_SWIFT_NAME).
+#ifndef RIME_LOGSINK_SWIFT_NAME
+#  if defined(__has_attribute) && __has_attribute(swift_name)
+#    define RIME_LOGSINK_SWIFT_NAME(x) __attribute__((swift_name(x)))
+#  else
+#    define RIME_LOGSINK_SWIFT_NAME(x)
+#  endif
+#endif
+
+#ifndef RIME_LOGSINK_ENUM_EXTENSIBILITY
+#  if defined(__has_attribute) && __has_attribute(enum_extensibility)
+#    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x) \
+      __attribute__((enum_extensibility(x)))
+#  else
+#    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x)
+#  endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Severity levels, aligned with glog's ordering.
-enum rime_logsink_severity {
-  RIME_LOGSINK_INFO = 0,
-  RIME_LOGSINK_WARNING = 1,
-  RIME_LOGSINK_ERROR = 2,
-  RIME_LOGSINK_FATAL = 3,
-};
+// Severity of a record. Values match glog's ordering, so they can be compared
+// and used as an index directly.
+//
+// No fixed underlying type: it would need C23 syntax, which is an extension
+// (with a diagnostic) before C23 in C, and it buys nothing here - both Clang and
+// GCC already derive a 4-byte unsigned type for this value set, and the Swift
+// import is identical either way. The width that matters for the ABI is
+// asserted by scripts/verify-swift-names.sh instead, so a future value change
+// that altered the representation fails the release pipeline loudly rather than
+// shifting the struct layout silently.
+typedef enum
+    RIME_LOGSINK_SWIFT_NAME("RimeLogSinkSeverity")
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_severity {
+  RIME_LOGSINK_INFO RIME_LOGSINK_SWIFT_NAME("info") = 0,
+  RIME_LOGSINK_WARNING RIME_LOGSINK_SWIFT_NAME("warning") = 1,
+  RIME_LOGSINK_ERROR RIME_LOGSINK_SWIFT_NAME("error") = 2,
+  RIME_LOGSINK_FATAL RIME_LOGSINK_SWIFT_NAME("fatal") = 3,
+} rime_logsink_severity;
+
+// Threshold for an output: the lowest severity it will emit. Distinct from
+// rime_logsink_severity because "off" is a state an output can be in and a
+// record can never be. The numeric values are offset by one from the severity
+// values on purpose - do not cast between the two types.
+// Plain enum for the same reason as above.
+typedef enum
+    RIME_LOGSINK_SWIFT_NAME("RimeLogSinkThreshold")
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_threshold {
+  // Emit nothing at this output, whatever the severity.
+  RIME_LOGSINK_SILENT RIME_LOGSINK_SWIFT_NAME("silent") = 0,
+  // Emit this severity and above. In C the AT_ prefix is required because
+  // enumerators share one namespace, and it doubles as a reminder that a
+  // threshold is "at this level and above"; Swift cases are namespaced by their
+  // type, so there the names are simply .info/.warning/.error/.fatal.
+  RIME_LOGSINK_AT_INFO RIME_LOGSINK_SWIFT_NAME("info") = 1,
+  RIME_LOGSINK_AT_WARNING RIME_LOGSINK_SWIFT_NAME("warning") = 2,
+  RIME_LOGSINK_AT_ERROR RIME_LOGSINK_SWIFT_NAME("error") = 3,
+  RIME_LOGSINK_AT_FATAL RIME_LOGSINK_SWIFT_NAME("fatal") = 4,
+} rime_logsink_threshold;
 
 // One log record. Pointers are valid only for the duration of the callback;
 // copy anything you need to keep.
 typedef struct rime_logsink_record {
-  int severity;  // rime_logsink_severity
+  rime_logsink_severity severity;
 
   // Message text. `message_length` excludes the trailing newline, but the text
   // may contain embedded newlines. There is no terminating NUL guarantee for
@@ -64,10 +159,10 @@ typedef struct rime_logsink_record {
 // and may run concurrently on several threads, so a callback must synchronize
 // its own state. It must also not call back into librime's logging (a
 // synchronous LOG() would re-enter glog while it holds its lock and deadlock),
-// nor call `disable_file_logging`/`set_stderr_severity`, which take glog's
-// non-recursive log mutex. Keep it short: glog holds a lock for the duration of
-// every callback, so slow work delays the logging thread and other sinks; hand
-// anything non-trivial to your own queue.
+// nor call set_stderr_threshold, which takes glog's non-recursive log mutex.
+// Keep it short: glog holds a lock for the duration of every callback, so slow
+// work delays the logging thread and other sinks; hand anything non-trivial to
+// your own queue.
 typedef void (*rime_logsink_callback)(void* context,
                                       const rime_logsink_record* record);
 
@@ -77,8 +172,9 @@ typedef struct rime_logsink_api_t {
   // Append a sink. `context` identifies it for removal and is passed through to
   // the callback; it must stay valid until remove_sink returns (glog's sink
   // lock makes that a lifetime barrier, so nothing is in flight afterwards).
-  // Installing the same context twice is refused. Sinks are additive: existing
-  // sinks, and glog's own file/stderr logging, keep working.
+  // Returns false for a null callback or a context that is already installed.
+  // Sinks are additive: existing sinks, and any built-in output that is still
+  // enabled, keep working.
   //
   // Note what this implies for the host: records may contain user input (typed
   // keys, dictionary entries), and deciding what to persist, what to redact and
@@ -89,15 +185,14 @@ typedef struct rime_logsink_api_t {
   // Returns false if no sink used that context.
   bool (*remove_sink)(void* context);
 
-  // Suppress glog's own file logging for all severities. Process-wide: glog
-  // state is global, so this also affects the host's own glog usage.
-  void (*disable_file_logging)(void);
-
-  // Set the minimum severity glog writes to stderr. RIME_LOGSINK_FATAL keeps
-  // only fatal messages. Process-wide, as above. Useful when forwarding to a
-  // log system that also collects stderr, where glog's stderr copy of every
-  // ERROR would otherwise appear twice.
-  void (*set_stderr_severity)(int severity);
+  // Set the lowest severity glog writes to stderr, or SILENT for none at all.
+  // Process-wide: glog's threshold is a global, so this also affects the host's
+  // own glog usage. Useful when the host collects stderr too, where glog's
+  // stderr copy of every message would otherwise be recorded twice.
+  //
+  // Call this after rime->setup(): `traits.log_dir = ""` raises the threshold
+  // to INFO as a side effect, which would overwrite a value set earlier.
+  bool (*set_stderr_threshold)(rime_logsink_threshold threshold);
 } RimeLogSinkApi;
 
 #ifdef __cplusplus

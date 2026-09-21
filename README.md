@@ -41,6 +41,25 @@ All consumer source code writes `import Rime`. The `Rime` module is declared onc
 
 Wrapper libraries depend on `Rime` only. Terminal apps that use the binary artifacts depend on `Rime` plus exactly one of `RimeDynamic`/`RimeStatic` (linked automatically, or manually with `pkg-config rime` flags). Apps binding a system librime depend on `RimeSystem` alone — `RimeSystem` replaces `Rime` in the graph, never combines with it.
 
+### Swift names
+
+librime ships two API flavors and this package exports the `stdbool` one, so in C every affected type carries a `_stdbool` suffix (`RimeApi_stdbool`, `RimeMenu_stdbool`, …) and the entry point is `rime_get_api_stdbool`. That suffix is an artifact of flavor disambiguation and has no meaning to a Swift caller.
+
+`Sources/RimeHeaders/include/Rime.apinotes` maps those names back, so Swift sees the plain spellings:
+
+| Swift | C symbol it still calls |
+|---|---|
+| `RimeApi`, `RimeMenu`, `RimeContext`, `RimeStatus`, `RimeLeversApi` | the `_stdbool` structs |
+| `rime_get_api` | `rime_get_api_stdbool` |
+
+This is a **Swift-side breaking rename**: the suffixed spellings no longer resolve, and the compiler reports `has been renamed to …`. Existing call sites need the un-suffixed name (the fix-it suggests it); a signature that names `RimeApi_stdbool` explicitly needs a manual look.
+
+Notes on the mechanism, because two failure modes are silent:
+
+- API notes live outside the headers, so the annotations cannot be overwritten by the release pipeline's header sync — the file is installed alongside the headers and travels with the artifacts.
+- A `Functions` entry must spell `SwiftName` with parentheses (`'rime_get_api()'`); without them the importer ignores the entry without a diagnostic. `scripts/verify-swift-names.sh` compiles a probe that fails if the plain names stop resolving, if the suffixed names still resolve, or if the two copies of the file drift apart. The release workflow runs it right after syncing headers.
+- `RimeSystem` carries its own copy of the same file, since its headers come from a system librime rather than this repository; the probe keeps the two in sync.
+
 ### Linking without embedding (XPC services and app extensions)
 
 Xcode embeds the `RimeDynamic` product into every target that declares it and offers no "link only" switch. Extension-like targets should declare `RimeDynamicStub` instead of `RimeDynamic`; the target is then linked against the framework by name while nothing is embedded. Wire the loader to the app's embedded copy:
@@ -87,7 +106,8 @@ Prerequisites:
 - macOS with Xcode command line tools
 - CMake and Ninja
 - vcpkg, with `VCPKG_ROOT` pointing at the vcpkg checkout
-- upstream `librime` source at `../librime` or `vendor/librime`
+- upstream `librime` source at `../librime` or `vendor/librime` (`vendor/librime`
+  may be a symlink to a development checkout; builds only read it)
 - plugin submodules initialized: `git submodule update --init --recursive`
 
 Build and package:
@@ -109,7 +129,22 @@ Package existing slice outputs:
 scripts/package-xcframework.sh
 ```
 
-Outputs are written to `out/` and `dist/`.
+Packaging also refreshes the sources this repository commits — the public
+headers under `Sources/RimeHeaders/include` and the `RimeDynamicStub`
+skeletons — so they always match the artifacts that were just produced.
+`VCPKG_ROOT` is required (there is no in-repo vcpkg fallback) and `cmake` and
+`ninja` must be on `PATH`.
+
+Outputs are written to `out/` and `dist/`. Each slice also gets a `source.env`
+recording the resolved upstream repo/ref/version/commit, which is what the
+packaging job reads from the downloaded slices.
+
+With no `UPSTREAM_REF`, the upstream **working tree** is built, so uncommitted
+edits in a development checkout are what gets compiled; `UPSTREAM_REF` builds
+that ref's committed content instead, and an unresolvable ref is an error. A
+worktree build records `UPSTREAM_REF=worktree` and appends `-dirty` to the
+commit when the tree is not clean, so the metadata does not overstate how
+reproducible the build is.
 
 ## Merged Plugins
 
@@ -161,21 +196,55 @@ decides what to write, where, and how much of it. A host that wants
 `os.Logger` builds that on top of the callback in a few lines, with its own
 subsystem, category and privacy choices.
 
-Call it after `rime->setup()`/`initialize()`, which is where librime initializes
-glog. Behaviour worth knowing:
+The API is reachable as soon as the library is loaded — module registration runs
+from a constructor — so install the sink **before** `rime->setup()` to also
+capture the component-registration logging that `setup()` and `initialize()`
+produce:
 
-- Sinks are **additive**. glog dispatches to every registered sink, so adding one
-  does not replace another, and glog's own file and stderr logging keeps working
-  unless you turn it off (`disable_file_logging`, `set_stderr_severity` — both
-  process-wide, because glog's state is global; the latter is how you avoid
-  ERROR records appearing twice when your log system also collects stderr).
-- Nothing is registered by default: a host that does not ask for a sink gets the
-  same logging behaviour as before.
+```c
+traits.log_dir       = "";   // librime's own switch: never write log files
+traits.min_log_level = 0;    // filtering here would also drop records from sinks
+rime->setup(&traits);
+api->set_stderr_threshold(RIME_LOGSINK_SILENT);   // after setup(), see below
+api->add_sink(context, callback);
+rime->initialize(&traits);
+```
+
+That combination yields no files, no stderr output, and every record in the
+sink. Behaviour worth knowing:
+
+- **Sinks are additive.** glog dispatches to every registered sink, so adding one
+  does not replace another. Nothing is registered by default, and a host that
+  does not ask for a sink sees unchanged logging.
+- **File logging is controlled by librime, not by this API.** `traits.log_dir =
+  ""` stops it, which is why there is no `disable_file_logging` here. It is
+  one-way at the glog level: neither re-running `setup()` nor pointing
+  `log_dir` somewhere else brings file logging back, so this API offers no
+  counterpart that would only pretend to.
+- **`log_dir = ""` also raises glog's stderr threshold to INFO** as a side
+  effect, so set `set_stderr_threshold` *after* `setup()` or it gets
+  overwritten. `SILENT` suppresses stderr entirely, fatal messages included.
+  The threshold is process-wide because glog's is, so it affects the host's own
+  glog usage too — and it is how you avoid duplicate records when your log
+  system also collects stderr.
+- Severity and threshold are separate enums: a record has a severity, an output
+  has a threshold, and only the threshold can be `SILENT`. Swift sees both with
+  their own case names — `RimeLogSinkSeverity.error`, `RimeLogSinkThreshold.error`
+  — because Swift namespaces cases by type; C keeps the flat
+  `RIME_LOGSINK_ERROR` / `RIME_LOGSINK_AT_ERROR` identifiers, where the `AT_`
+  prefix is required by C's single namespace and reads as "at this level and
+  above".
 - The callback runs on the logging thread while glog holds a lock, may be called
   concurrently from several threads, and must return promptly. Do not call back
   into librime logging from it (that deadlocks).
 - Records can contain user input (typed keys, dictionary entries). Redaction and
   retention are the callback's responsibility, not this module's.
+
+One boundary worth stating: with the static artifacts the host's earliest
+reliable call site is `main()`, because constructor order follows link order, so
+anything logged before that is structurally uncapturable by an in-process sink.
+That window is empty in current librime — its module constructors only register
+and do not log — but it is a property of upstream, not a guarantee of this API.
 
 Two upstream behaviors matter for this arrangement:
 

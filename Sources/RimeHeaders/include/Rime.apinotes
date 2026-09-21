@@ -1,0 +1,37 @@
+# Copyright (c) 2026, librime-xcframework contributors
+# Distributed under the BSD 3-Clause License; see LICENSE.
+#
+# Swift-side names for the Rime module.
+#
+# The public headers are compiled in their stdbool flavor, so every renamed
+# entity carries a `_stdbool` suffix in C and the function entry point is
+# `rime_get_api_stdbool`. That suffix is an implementation detail of how the
+# library deduplicates its two API flavors; Swift consumers should not see it.
+#
+# These notes are applied by the Clang importer and change nothing on the C or
+# binary side: the emitted calls still reference `rime_get_api_stdbool` and the
+# structs keep their `_stdbool` tags. Renaming here rather than with
+# `__attribute__((swift_name))` in the headers keeps this file free of
+# annotations that the release pipeline's header sync would overwrite.
+#
+# Two things fail silently and are therefore covered by
+# scripts/verify-swift-names.sh:
+#   - a Function entry needs the parentheses in SwiftName ('name()'); without
+#     them the rename is ignored with no diagnostic;
+#   - this file must be named after the module (Rime) and sit next to the
+#     module map.
+Name: Rime
+Typedefs:
+- Name: RimeApi_stdbool
+  SwiftName: RimeApi
+- Name: RimeMenu_stdbool
+  SwiftName: RimeMenu
+- Name: RimeContext_stdbool
+  SwiftName: RimeContext
+- Name: RimeStatus_stdbool
+  SwiftName: RimeStatus
+- Name: RimeLeversApi_stdbool
+  SwiftName: RimeLeversApi
+Functions:
+- Name: rime_get_api_stdbool
+  SwiftName: 'rime_get_api()'

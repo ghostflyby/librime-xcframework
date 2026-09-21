@@ -9,8 +9,8 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - CI should checkout the real upstream repository into `vendor/librime` without submodules.
 - The no-submodules rule is about not pulling in librime's vendored third-party dependency graph. It does not apply to the Rime plugins under `plugins/`, which are submodules pinned to explicit commits.
 - Treat the local sibling `../librime` repository, including any local `vcpkg` branch, as reference material only. Do not assume those local branches exist upstream.
-- Build scripts should resolve upstream source in this order: `UPSTREAM_SOURCE_DIR`, `vendor/librime`, then `../librime`.
-- Build scripts should build the current upstream checkout by default, or `UPSTREAM_REF` when provided.
+- Build scripts should resolve upstream source in this order: `UPSTREAM_SOURCE_DIR`, `vendor/librime`, then `../librime`. `vendor/librime` may be a symlink to a development checkout; builds must only read it (export to a work directory), never write into it.
+- Build scripts should build the upstream working tree by default, or the committed content of `UPSTREAM_REF` when provided; an unresolvable `UPSTREAM_REF` must fail rather than fall back.
 
 ## Dependencies
 
@@ -18,6 +18,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Use overlay ports in `ports/` when a third-party dependency needs packaging-only fixes for Apple targets.
 - Set up CMake and Ninja in CI with `lukka/get-cmake`.
 - Set up vcpkg in CI with `lukka/run-vcpkg`.
+- Require `VCPKG_ROOT` from the environment; do not add a fallback that looks for a vcpkg checkout inside this repository, and do not clone vcpkg into it. A silent fallback hides a missing environment dependency and invites a repo-local checkout that then has to be maintained.
 - Use vcpkg's `files` binary cache source with `actions/cache`; do not rely on the removed `x-gha` backend.
 - Keep the vcpkg `builtin-baseline` only in `vcpkg.json`. Do not duplicate it in workflow environment variables.
 - Let Dependabot update the vcpkg baseline and GitHub Actions versions.
@@ -34,6 +35,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Package dynamic outputs as `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator before creating the dynamic XCFramework.
 - Package the macOS dynamic slice as a versioned deep bundle (`Versions/A` with relative symlinks and a `Versions/A` install name); keep iOS slices flat.
 - Expose a single Swift module named `Rime` from the `RimeHeaders` systemLibrary target under `Sources/RimeHeaders/include`; keep `RimeShim.h` and the pruned librime public headers committed there, and keep the target free of compiled sources (no placeholder translation unit) so consumer-side coverage instrumentation has nothing to hook.
+- Keep the Swift-facing names un-suffixed with `Rime.apinotes` (not `swift_name` attributes in the headers, which the release header sync would overwrite). The file must exist in both `Sources/RimeHeaders/include/` and `Sources/RimeSystem/`, stay identical, and be installed with the exported headers so it travels with the artifacts; `scripts/verify-swift-names.sh` guards all three.
 - Ship the static and dynamic XCFrameworks without module maps so the `Rime` module is provided only by the headers target; keep the public headers inside the artifacts.
 - Keep `RimeSystem` implementation-neutral: it is a systemLibrary declaring `module Rime [system]`, uses `pkg-config rime` for flags, does not add a module-map `link` directive that would force one library name, and must not be combined with the `Rime` headers product in one graph.
 - Generate `RimeDynamicStub` skeleton frameworks from the released dynamic dylibs with `tapi stubify` — the tbd sits at the binary's position inside `RimeDynamic.framework` (deep `Versions/A` layout for macOS, flat for iOS) — and commit them under `Sources/RimeDynamicStub/<platform>` with the release manifest. The stub target exposes no API and contributes only the `-framework RimeDynamic` linker setting so extension-like targets can link without embedding.

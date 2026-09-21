@@ -235,6 +235,57 @@ README
   done
 }
 
+# Keep the sources committed in this repository in step with the artifacts this
+# run produced. Sources/RimeHeaders/include is what downstream checks out to
+# build against and Sources/RimeDynamicStub holds the committed skeletons, so
+# both are refreshed as part of packaging - the same place the artifacts are
+# assembled - rather than as a separate operation someone has to remember.
+sync_repository_sources() {
+  local headers_dir="${repo_root}/Sources/RimeHeaders/include"
+  local stubs_root="${repo_root}/Sources/RimeDynamicStub"
+  local platform source_framework destination smoke_dir
+
+  # --delete is deliberate: the committed headers must be exactly what the
+  # artifacts carry, so a header that disappeared from the build output must
+  # disappear here too. module.modulemap is excluded because it is written by
+  # hand below rather than shipped in the artifacts (the XCFrameworks
+  # intentionally carry no module map).
+  mkdir -p "${headers_dir}"
+  rsync -a --delete --exclude module.modulemap "${arm64_dynamic_headers}/" "${headers_dir}/"
+  cat > "${headers_dir}/module.modulemap" <<'MODULEMAP'
+module Rime {
+  umbrella header "RimeShim.h"
+  export *
+}
+MODULEMAP
+
+  # Compile the umbrella as a module: catches a header the sync dropped or broke
+  # before anything is committed.
+  smoke_dir="$(mktemp -d)"
+  printf '#include "RimeShim.h"\n' > "${smoke_dir}/rime-module-smoke.c"
+  xcrun clang -fmodules -fsyntax-only -I "${headers_dir}" "${smoke_dir}/rime-module-smoke.c"
+  rm -rf "${smoke_dir}"
+
+  # The sync above deletes files absent from the build output, so this also
+  # proves Rime.apinotes travelled with the artifacts and that the un-suffixed
+  # Swift names still resolve.
+  "${script_dir}/verify-swift-names.sh" "${headers_dir}"
+
+  for platform in macos ios ios-simulator; do
+    source_framework="${out_dir}/linker-stubs/${platform}/RimeDynamic.framework"
+    if [[ ! -d "${source_framework}" ]]; then
+      printf 'missing linker stub: %s\n' "${source_framework}" >&2
+      exit 1
+    fi
+    destination="${stubs_root}/${platform}"
+    rm -rf "${destination}"
+    mkdir -p "${destination}"
+    cp -R "${source_framework}" "${destination}/RimeDynamic.framework"
+  done
+
+  printf 'synced repository sources: headers and RimeDynamicStub skeletons\n'
+}
+
 rsync -a --delete "${arm64_static_headers}/" "${static_universal_headers}/"
 lipo -create "${arm64_static_lib}" "${x86_64_static_lib}" -output "${static_universal_lib}"
 rsync -a --delete "${ios_simulator_arm64_static_headers}/" "${ios_simulator_universal_headers}/"
@@ -270,6 +321,8 @@ xcodebuild -create-xcframework \
   -output "${dynamic_xcframework_path}"
 
 generate_linker_stubs
+
+sync_repository_sources
 
 copy_distribution_notices
 
