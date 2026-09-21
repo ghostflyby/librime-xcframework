@@ -89,42 +89,23 @@
 #  endif
 #endif
 
-// The fixed underlying type below is standard in C23 and in C++11 onwards, but
-// an extension in earlier C modes, where it draws a diagnostic: GCC says "ISO C
-// does not support specifying 'enum' underlying types before C23", Clang
-// "-Wc23-extensions". __extension__ suppresses exactly that. It is a GCC/Clang
-// keyword, so anything else gets an empty expansion instead of a syntax error -
-// and C++ needs no marker at all, since the syntax is standard there.
-//
-// Apple gates the syntax itself on __has_feature(objc_fixed_enum) and drops to
-// a plain enum where unavailable. That is not done here: GCC supports the
-// syntax but does not provide __has_feature, so feature-gating would give up
-// the pinned representation on GCC for no reason. Marking it as a deliberate
-// extension keeps the 4-byte width everywhere.
-#ifndef RIME_LOGSINK_EXTENSION
-#  if defined(__GNUC__) || defined(__clang__)
-#    define RIME_LOGSINK_EXTENSION __extension__
-#  else
-#    define RIME_LOGSINK_EXTENSION
-#  endif
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Severity of a record. Values match glog's ordering, so they can be compared
-// and used as an index directly. The underlying type is a fixed-width one so
-// the ABI is pinned to 4 bytes on every platform rather than to whatever the
-// compiler derives for the current value set.
+// and used as an index directly.
 //
-// __extension__ marks the fixed underlying type as a deliberate extension: it
-// is C23 syntax, so without this a -pedantic build in C99/C11 mode warns
-// (-Wc23-extensions). The marker only silences that diagnostic - the
-// representation, the values, and the Swift import are unchanged.
-RIME_LOGSINK_EXTENSION typedef enum
+// No fixed underlying type: it would need C23 syntax, which is an extension
+// (with a diagnostic) before C23 in C, and it buys nothing here - both Clang and
+// GCC already derive a 4-byte unsigned type for this value set, and the Swift
+// import is identical either way. The width that matters for the ABI is
+// asserted by scripts/verify-swift-names.sh instead, so a future value change
+// that altered the representation fails the release pipeline loudly rather than
+// shifting the struct layout silently.
+typedef enum
     RIME_LOGSINK_SWIFT_NAME("RimeLogSinkSeverity")
-    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_severity : uint32_t {
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_severity {
   RIME_LOGSINK_INFO RIME_LOGSINK_SWIFT_NAME("info") = 0,
   RIME_LOGSINK_WARNING RIME_LOGSINK_SWIFT_NAME("warning") = 1,
   RIME_LOGSINK_ERROR RIME_LOGSINK_SWIFT_NAME("error") = 2,
@@ -135,10 +116,10 @@ RIME_LOGSINK_EXTENSION typedef enum
 // rime_logsink_severity because "off" is a state an output can be in and a
 // record can never be. The numeric values are offset by one from the severity
 // values on purpose - do not cast between the two types.
-// __extension__ here for the same reason as above.
-RIME_LOGSINK_EXTENSION typedef enum
+// Plain enum for the same reason as above.
+typedef enum
     RIME_LOGSINK_SWIFT_NAME("RimeLogSinkThreshold")
-    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_threshold : uint32_t {
+    RIME_LOGSINK_ENUM_EXTENSIBILITY(closed) rime_logsink_threshold {
   // Emit nothing at this output, whatever the severity.
   RIME_LOGSINK_SILENT RIME_LOGSINK_SWIFT_NAME("silent") = 0,
   // Emit this severity and above. In C the AT_ prefix is required because

@@ -154,6 +154,39 @@ fi
 
 printf 'C/C++ pedantic probe passed: header is warning-free for plain consumers\n'
 
+# The enums deliberately have no fixed underlying type, so the 4-byte
+# representation the ABI depends on is a property of the current value set
+# rather than a guarantee. Assert it here: if a value is ever added that pushes
+# the compiler to a different type, this fails the release pipeline instead of
+# silently shifting rime_logsink_record's layout.
+cat > "${scratch}/layout.c" <<'C'
+#include <rime_logsink_api.h>
+#include <stddef.h>
+#include <stdio.h>
+int main(void) {
+  printf("%zu %zu %zu\n", sizeof(rime_logsink_severity),
+         sizeof(rime_logsink_threshold), sizeof(rime_logsink_record));
+  return 0;
+}
+C
+
+if ! xcrun clang -arch arm64 -isysroot "$(xcrun --sdk macosx --show-sdk-path)" \
+    -mmacosx-version-min=11.0 -I "${include_dir}" "${scratch}/layout.c" \
+    -o "${scratch}/layout" 2> "${scratch}/layout.log"; then
+  printf 'layout probe does not compile:\n' >&2
+  sed 's/^/  /' "${scratch}/layout.log" >&2
+  exit 1
+fi
+
+layout="$("${scratch}/layout")"
+if [[ "${layout}" != "4 4 64" ]]; then
+  printf 'unexpected enum/record layout: %s (expected "4 4 64")\n' "${layout}" >&2
+  printf 'a change to the enum values or the record fields altered the ABI\n' >&2
+  exit 1
+fi
+
+printf 'layout probe passed: 4-byte enums, 64-byte record\n'
+
 # RimeSystem declares the same module for a system-provided librime, so it needs
 # the same notes. Compare rather than duplicating the probe: the two files must
 # not drift.
