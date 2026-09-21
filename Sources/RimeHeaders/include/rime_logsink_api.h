@@ -87,11 +87,14 @@ typedef enum __attribute__((enum_extensibility(closed),
     : unsigned int {
   // Emit nothing at this output, whatever the severity.
   RIME_LOGSINK_SILENT __attribute__((swift_name("silent"))) = 0,
-  // Emit this severity and above.
-  RIME_LOGSINK_AT_INFO __attribute__((swift_name("atInfo"))) = 1,
-  RIME_LOGSINK_AT_WARNING __attribute__((swift_name("atWarning"))) = 2,
-  RIME_LOGSINK_AT_ERROR __attribute__((swift_name("atError"))) = 3,
-  RIME_LOGSINK_AT_FATAL __attribute__((swift_name("atFatal"))) = 4,
+  // Emit this severity and above. In C the AT_ prefix is required because
+  // enumerators share one namespace, and it doubles as a reminder that a
+  // threshold is "at this level and above"; Swift cases are namespaced by their
+  // type, so there the names are simply .info/.warning/.error/.fatal.
+  RIME_LOGSINK_AT_INFO __attribute__((swift_name("info"))) = 1,
+  RIME_LOGSINK_AT_WARNING __attribute__((swift_name("warning"))) = 2,
+  RIME_LOGSINK_AT_ERROR __attribute__((swift_name("error"))) = 3,
+  RIME_LOGSINK_AT_FATAL __attribute__((swift_name("fatal"))) = 4,
 } rime_logsink_threshold;
 
 // One log record. Pointers are valid only for the duration of the callback;

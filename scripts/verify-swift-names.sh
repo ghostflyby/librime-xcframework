@@ -86,16 +86,25 @@ func describe(_ severity: RimeLogSinkSeverity) -> String {
   }
 }
 
-// The threshold enum has an off state that a record can never have.
+// The threshold enum has an off state that a record can never have, and its
+// case names are namespaced by the type - so .info/.error appear on BOTH enums
+// without an at- prefix, while C keeps its flat RIME_LOGSINK_AT_ identifiers.
 let silent: RimeLogSinkThreshold = .silent
-let atError: RimeLogSinkThreshold = .atError
+let atError: RimeLogSinkThreshold = .error
+let atInfo: RimeLogSinkThreshold = .info
 
 // And the constants must be passable to the API (an int parameter would reject
 // them, which was the original defect).
 func configure(_ api: inout RimeLogSinkApi) {
   _ = api.set_stderr_threshold(silent)
   _ = api.set_stderr_threshold(atError)
-  _ = api.set_stderr_threshold(.atFatal)
+  _ = api.set_stderr_threshold(atInfo)
+  _ = api.set_stderr_threshold(.fatal)
+}
+
+// The same case spelling on the other enum must still resolve to its own type.
+func sameSpellingBothEnums(_ s: RimeLogSinkSeverity, _ t: RimeLogSinkThreshold) -> Bool {
+  s == .info && t == .info
 }
 
 // The record's severity is the enum, so callers compare it as one.
@@ -103,7 +112,7 @@ func inspect(_ record: rime_logsink_record) -> Bool {
   record.severity == .error
 }
 
-_ = (describe, silent, atError, configure, inspect)
+_ = (describe, silent, atError, atInfo, configure, inspect, sameSpellingBothEnums)
 SWIFT
 
 if ! xcrun swiftc -typecheck "${scratch}/logsink.swift" -I "${include_dir}" \

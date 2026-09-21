@@ -212,7 +212,12 @@ sink. Behaviour worth knowing:
   glog usage too — and it is how you avoid duplicate records when your log
   system also collects stderr.
 - Severity and threshold are separate enums: a record has a severity, an output
-  has a threshold, and only the threshold can be `SILENT`.
+  has a threshold, and only the threshold can be `SILENT`. Swift sees both with
+  their own case names — `RimeLogSinkSeverity.error`, `RimeLogSinkThreshold.error`
+  — because Swift namespaces cases by type; C keeps the flat
+  `RIME_LOGSINK_ERROR` / `RIME_LOGSINK_AT_ERROR` identifiers, where the `AT_`
+  prefix is required by C's single namespace and reads as "at this level and
+  above".
 - The callback runs on the logging thread while glog holds a lock, may be called
   concurrently from several threads, and must return promptly. Do not call back
   into librime logging from it (that deadlocks).
