@@ -67,6 +67,11 @@ pinned revisions are recorded in `plugins.json` and in the release
 `build-metadata.json`; full license texts are collected into
 `third-party-notices.zip` under `plugins/`.
 
+One further merged plugin, `logsink`, is a source directory of the packaging
+repository rather than an upstream project. It is covered by this repository's
+own BSD 3-Clause license (`LICENSE.txt`), so it has no separate entry in the
+notices bundle.
+
 - **librime-lua** — Extending RIME with Lua scripts.
   Upstream project: <https://github.com/hchunhui/librime-lua>
   License: BSD 3-Clause License, Copyright (c) 2021, librime-lua Developers

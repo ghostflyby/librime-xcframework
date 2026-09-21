@@ -82,13 +82,43 @@ def pinned_commit(path):
     return "unknown"
 
 
+def wrapper_repo():
+    """owner/name of this packaging repository, from its git remote."""
+    try:
+        url = subprocess.run(
+            ["git", "-C", repo_root, "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True).stdout.strip()
+    except Exception:
+        return "librime-xcframework"
+    for prefix in ("https://github.com/", "git@github.com:"):
+        if url.startswith(prefix):
+            url = url[len(prefix):]
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url
+
+
 entries = []
+wrapper = wrapper_repo()
 for plugin in json.load(open(manifest))["plugins"]:
-    commit = pinned_commit(plugin["path"])
-    url = plugin["url"]
-    repo = url.rsplit("github.com/", 1)[-1]
-    if repo.endswith(".git"):
-        repo = repo[:-4]
+    is_local = bool(plugin.get("local"))
+    if is_local:
+        # A local plugin is a source directory of this repository, covered by
+        # the wrapper LICENSE; what identifies it is the packaging commit, and
+        # there is no upstream repo or pin to record.
+        repo = wrapper
+        try:
+            commit = subprocess.run(
+                ["git", "-C", repo_root, "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            commit = "unknown"
+    else:
+        commit = pinned_commit(plugin["path"])
+        url = plugin["url"]
+        repo = url.rsplit("github.com/", 1)[-1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
     entries.append(
         '    {\n'
         f'      "name": {json.dumps(plugin["name"])},\n'
