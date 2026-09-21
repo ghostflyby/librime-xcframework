@@ -180,21 +180,50 @@ decides what to write, where, and how much of it. A host that wants
 `os.Logger` builds that on top of the callback in a few lines, with its own
 subsystem, category and privacy choices.
 
-Call it after `rime->setup()`/`initialize()`, which is where librime initializes
-glog. Behaviour worth knowing:
+The API is reachable as soon as the library is loaded — module registration runs
+from a constructor — so install the sink **before** `rime->setup()` to also
+capture the component-registration logging that `setup()` and `initialize()`
+produce:
 
-- Sinks are **additive**. glog dispatches to every registered sink, so adding one
-  does not replace another, and glog's own file and stderr logging keeps working
-  unless you turn it off (`disable_file_logging`, `set_stderr_severity` — both
-  process-wide, because glog's state is global; the latter is how you avoid
-  ERROR records appearing twice when your log system also collects stderr).
-- Nothing is registered by default: a host that does not ask for a sink gets the
-  same logging behaviour as before.
+```c
+traits.log_dir       = "";   // librime's own switch: never write log files
+traits.min_log_level = 0;    // filtering here would also drop records from sinks
+rime->setup(&traits);
+api->set_stderr_threshold(RIME_LOGSINK_SILENT);   // after setup(), see below
+api->add_sink(context, callback);
+rime->initialize(&traits);
+```
+
+That combination yields no files, no stderr output, and every record in the
+sink. Behaviour worth knowing:
+
+- **Sinks are additive.** glog dispatches to every registered sink, so adding one
+  does not replace another. Nothing is registered by default, and a host that
+  does not ask for a sink sees unchanged logging.
+- **File logging is controlled by librime, not by this API.** `traits.log_dir =
+  ""` stops it, which is why there is no `disable_file_logging` here. It is
+  one-way at the glog level: neither re-running `setup()` nor pointing
+  `log_dir` somewhere else brings file logging back, so this API offers no
+  counterpart that would only pretend to.
+- **`log_dir = ""` also raises glog's stderr threshold to INFO** as a side
+  effect, so set `set_stderr_threshold` *after* `setup()` or it gets
+  overwritten. `SILENT` suppresses stderr entirely, fatal messages included.
+  The threshold is process-wide because glog's is, so it affects the host's own
+  glog usage too — and it is how you avoid duplicate records when your log
+  system also collects stderr.
+- Severity and threshold are separate enums: a record has a severity, an output
+  has a threshold, and only the threshold can be `SILENT`.
 - The callback runs on the logging thread while glog holds a lock, may be called
   concurrently from several threads, and must return promptly. Do not call back
   into librime logging from it (that deadlocks).
 - Records can contain user input (typed keys, dictionary entries). Redaction and
   retention are the callback's responsibility, not this module's.
+
+One boundary worth stating: with the static artifacts the host's earliest
+reliable call site is `main()`, because constructor order follows link order, so
+anything logged before that is structurally uncapturable by an in-process sink.
+That window is empty in current librime — its module constructors only register
+and do not log — but it is a property of upstream, not a guarantee of this API.
 
 Two upstream behaviors matter for this arrangement:
 

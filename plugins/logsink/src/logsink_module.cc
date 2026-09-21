@@ -28,23 +28,33 @@ bool rime_logsink_remove_sink(void* context) {
   return LogSink::Instance().Remove(context);
 }
 
-void rime_logsink_disable_file_logging() {
-  // An empty destination means "do not log this severity to a file".
-  for (int severity = google::GLOG_INFO; severity < google::NUM_SEVERITIES;
-       ++severity) {
-    google::SetLogDestination(static_cast<google::LogSeverity>(severity), "");
+bool rime_logsink_set_stderr_threshold(rime_logsink_threshold threshold) {
+  // glog's threshold is a plain int global, and it has no "off" state: a value
+  // above FATAL is what silences it, because the comparison is
+  // `severity >= threshold`. Translate our enum here so callers never deal in
+  // out-of-range values.
+  int glog_threshold;
+  switch (threshold) {
+    case RIME_LOGSINK_SILENT:
+      glog_threshold = google::NUM_SEVERITIES;  // above FATAL
+      break;
+    case RIME_LOGSINK_AT_INFO:
+      glog_threshold = google::GLOG_INFO;
+      break;
+    case RIME_LOGSINK_AT_WARNING:
+      glog_threshold = google::GLOG_WARNING;
+      break;
+    case RIME_LOGSINK_AT_ERROR:
+      glog_threshold = google::GLOG_ERROR;
+      break;
+    case RIME_LOGSINK_AT_FATAL:
+      glog_threshold = google::GLOG_FATAL;
+      break;
+    default:
+      return false;
   }
-}
-
-void rime_logsink_set_stderr_severity(int severity) {
-  if (severity < 0) {
-    severity = 0;
-  }
-  // glog treats a threshold above FATAL as "nothing to stderr".
-  if (severity > google::GLOG_FATAL) {
-    severity = google::GLOG_FATAL + 1;
-  }
-  google::SetStderrLogging(static_cast<google::LogSeverity>(severity));
+  google::SetStderrLogging(static_cast<google::LogSeverity>(glog_threshold));
+  return true;
 }
 
 RimeLogSinkApi* rime_logsink_get_api() {
@@ -57,8 +67,7 @@ RimeLogSinkApi* rime_logsink_get_api() {
     RIME_STRUCT_INIT(RimeLogSinkApi, api);
     api.add_sink = &rime_logsink_add_sink;
     api.remove_sink = &rime_logsink_remove_sink;
-    api.disable_file_logging = &rime_logsink_disable_file_logging;
-    api.set_stderr_severity = &rime_logsink_set_stderr_severity;
+    api.set_stderr_threshold = &rime_logsink_set_stderr_threshold;
   });
   return &api;
 }

@@ -52,7 +52,10 @@ class LogSink::Impl : public google::LogSink {
             const google::LogMessageTime& time, const char* message,
             size_t message_len) override {
     rime_logsink_record record;
-    record.severity = static_cast<int>(severity);
+    // glog's LogSeverity and our rime_logsink_severity share the same ordering,
+    // so this maps directly. The cast is explicit because our enum is a
+    // distinct type with a pinned underlying type.
+    record.severity = static_cast<rime_logsink_severity>(severity);
     record.message = message;
     record.message_length = message_len;
     record.base_filename = base_filename;

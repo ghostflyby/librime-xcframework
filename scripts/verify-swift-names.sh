@@ -68,6 +68,53 @@ fi
 
 printf 'swift name probe passed: un-suffixed names resolve, suffixed names are rejected\n'
 
+# The logsink enums must import as Swift enums rather than as integers, which is
+# what makes the constants passable to the API and exhaustive switches possible.
+# Both properties regress silently if someone rewrites them as plain `int`.
+cat > "${scratch}/logsink.swift" <<'SWIFT'
+import Rime
+
+// Swift-facing names, so the C identifiers with their RIME_LOGSINK_ prefix do
+// not leak into call sites.
+func describe(_ severity: RimeLogSinkSeverity) -> String {
+  // Exhaustive on purpose; an open enum would require @unknown default here.
+  switch severity {
+  case .info: return "info"
+  case .warning: return "warning"
+  case .error: return "error"
+  case .fatal: return "fatal"
+  }
+}
+
+// The threshold enum has an off state that a record can never have.
+let silent: RimeLogSinkThreshold = .silent
+let atError: RimeLogSinkThreshold = .atError
+
+// And the constants must be passable to the API (an int parameter would reject
+// them, which was the original defect).
+func configure(_ api: inout RimeLogSinkApi) {
+  _ = api.set_stderr_threshold(silent)
+  _ = api.set_stderr_threshold(atError)
+  _ = api.set_stderr_threshold(.atFatal)
+}
+
+// The record's severity is the enum, so callers compare it as one.
+func inspect(_ record: rime_logsink_record) -> Bool {
+  record.severity == .error
+}
+
+_ = (describe, silent, atError, configure, inspect)
+SWIFT
+
+if ! xcrun swiftc -typecheck "${scratch}/logsink.swift" -I "${include_dir}" \
+    2> "${scratch}/logsink.log"; then
+  printf 'logsink enum probe failed; the enums must import as Swift enums:\n' >&2
+  sed 's/^/  /' "${scratch}/logsink.log" >&2
+  exit 1
+fi
+
+printf 'logsink enum probe passed: severities and thresholds are Swift enums\n'
+
 # RimeSystem declares the same module for a system-provided librime, so it needs
 # the same notes. Compare rather than duplicating the probe: the two files must
 # not drift.
