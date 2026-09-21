@@ -66,12 +66,12 @@ extern "C" {
 #endif
 
 // Severity of a record. Values match glog's ordering, so they can be compared
-// and used as an index directly. The underlying type is pinned so the ABI does
-// not shift if a value is ever added or reordered; all values are non-negative,
-// so `unsigned int` matches what the compiler derives anyway.
+// and used as an index directly. The underlying type is a fixed-width one so
+// the ABI is pinned to 4 bytes on every platform rather than to whatever the
+// compiler derives for the current value set.
 typedef enum __attribute__((enum_extensibility(closed),
                             swift_name("RimeLogSinkSeverity"))) rime_logsink_severity
-    : unsigned int {
+    : uint32_t {
   RIME_LOGSINK_INFO __attribute__((swift_name("info"))) = 0,
   RIME_LOGSINK_WARNING __attribute__((swift_name("warning"))) = 1,
   RIME_LOGSINK_ERROR __attribute__((swift_name("error"))) = 2,
@@ -84,7 +84,7 @@ typedef enum __attribute__((enum_extensibility(closed),
 // values on purpose - do not cast between the two types.
 typedef enum __attribute__((enum_extensibility(closed),
                             swift_name("RimeLogSinkThreshold"))) rime_logsink_threshold
-    : unsigned int {
+    : uint32_t {
   // Emit nothing at this output, whatever the severity.
   RIME_LOGSINK_SILENT __attribute__((swift_name("silent"))) = 0,
   // Emit this severity and above. In C the AT_ prefix is required because
