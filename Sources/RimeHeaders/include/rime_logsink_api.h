@@ -61,35 +61,52 @@
 
 #include "rime_api.h"  // for RimeCustomApi / RimeModule
 
-// swift_name and enum_extensibility are Clang attributes; GCC and other
-// compilers do not know them and would warn "attribute directive ignored" under
-// -Wattributes. Both are purely a Swift-facing annotation layer, so compiling
-// them away costs C and C++ consumers nothing.
-#if defined(__has_attribute)
-#  if __has_attribute(swift_name)
+// swift_name and enum_extensibility are Clang attributes. An unrecognized
+// attribute is semantically ignored, but GCC still warns about it
+// ("'swift_name' attribute directive ignored [-Wattributes]") with no warning
+// flag needed, so a bare use would make every GCC build noisy. Both are purely
+// a Swift-facing annotation layer, so compiling them away costs C and C++
+// consumers nothing.
+//
+// The shape follows Apple's own headers (CFBase.h, CFAvailability.h): guard on
+// __has_attribute, fall back to an empty expansion, and let a definition from
+// outside win via #ifndef. There is no compiler-provided SWIFT_NAME macro to
+// reuse - each framework defines its own (CF_SWIFT_NAME, NS_SWIFT_NAME).
+#ifndef RIME_LOGSINK_SWIFT_NAME
+#  if defined(__has_attribute) && __has_attribute(swift_name)
 #    define RIME_LOGSINK_SWIFT_NAME(x) __attribute__((swift_name(x)))
 #  else
 #    define RIME_LOGSINK_SWIFT_NAME(x)
 #  endif
-#  if __has_attribute(enum_extensibility)
+#endif
+
+#ifndef RIME_LOGSINK_ENUM_EXTENSIBILITY
+#  if defined(__has_attribute) && __has_attribute(enum_extensibility)
 #    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x) \
       __attribute__((enum_extensibility(x)))
 #  else
 #    define RIME_LOGSINK_ENUM_EXTENSIBILITY(x)
 #  endif
-#else
-#  define RIME_LOGSINK_SWIFT_NAME(x)
-#  define RIME_LOGSINK_ENUM_EXTENSIBILITY(x)
 #endif
 
 // The fixed underlying type below is standard in C23 and in C++11 onwards, but
-// an extension in earlier C modes. `__extension__` suppresses the resulting
-// diagnostic there; it is a GCC/Clang keyword, so any other compiler gets an
-// empty expansion rather than a syntax error.
-#if defined(__GNUC__) || defined(__clang__)
-#  define RIME_LOGSINK_EXTENSION __extension__
-#else
-#  define RIME_LOGSINK_EXTENSION
+// an extension in earlier C modes, where it draws a diagnostic: GCC says "ISO C
+// does not support specifying 'enum' underlying types before C23", Clang
+// "-Wc23-extensions". __extension__ suppresses exactly that. It is a GCC/Clang
+// keyword, so anything else gets an empty expansion instead of a syntax error -
+// and C++ needs no marker at all, since the syntax is standard there.
+//
+// Apple gates the syntax itself on __has_feature(objc_fixed_enum) and drops to
+// a plain enum where unavailable. That is not done here: GCC supports the
+// syntax but does not provide __has_feature, so feature-gating would give up
+// the pinned representation on GCC for no reason. Marking it as a deliberate
+// extension keeps the 4-byte width everywhere.
+#ifndef RIME_LOGSINK_EXTENSION
+#  if defined(__GNUC__) || defined(__clang__)
+#    define RIME_LOGSINK_EXTENSION __extension__
+#  else
+#    define RIME_LOGSINK_EXTENSION
+#  endif
 #endif
 
 #ifdef __cplusplus
