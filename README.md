@@ -271,19 +271,37 @@ would with any other Rime distribution.
 
 ## Versioning
 
-Package versions use:
+Package versions are:
 
 ```text
-<upstream-version>-pack.<packaging-revision>
+<upstream-version>-pack.<epoch>.<minor>.<patch>
 ```
 
-In the build workflow, leaving `upstream_ref` empty builds the latest upstream release tag. Leaving `packaging_version` empty derives the release tag from the upstream version and `packaging_revision`; if `packaging_revision` is also empty, the workflow uses the next available pack revision.
+- **epoch** — the packaging era. Currently `9`, and a constant. It only exists
+  to order above the earlier `<upstream-version>-pack.<N>` tags (the highest was
+  `pack.8`); those tags are still valid and none of them had to be rewritten.
+- **minor** — packaging changes worth distinguishing: a new capability, or a
+  change consumers must react to.
+- **patch** — another build of the same thing.
 
-Example:
+Only the **patch** is automatic. With `packaging_version` left empty the
+workflow continues the current series, so a plain rebuild, or a rebuild after an
+upstream patch release, never changes which packaging feature level a consumer
+is being offered. Pass `packaging_version` explicitly to make a **minor** or
+**epoch** release.
 
 ```text
-1.16.1-pack.1
+1.17.0-pack.9.0.0     first package of 1.17.0 under this scheme
+1.17.0-pack.9.0.1     rebuild, same feature level
+1.17.0-pack.9.1.0     explicit packaging minor release
+1.18.0-pack.9.0.0     upstream moved on; the epoch carries over
 ```
+
+Releasing is ordered so that nothing becomes visible before everything else has
+succeeded: the workflow commits the manifest and pushes the tag, creates the
+release as a **draft** and uploads the assets, and only then flips it to
+published and marks it latest as its final step. A failure anywhere before that
+leaves a draft, not a half-announced release.
 
 ### Build-only runs
 
