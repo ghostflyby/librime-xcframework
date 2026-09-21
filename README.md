@@ -17,6 +17,12 @@ A release contains:
 
 The static XCFramework contains macOS arm64/x86_64, iOS device arm64, and iOS simulator arm64/x86_64 library slices. The dynamic XCFramework contains `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator. The macOS slice is a versioned deep bundle (`Versions/A`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic`) so SwiftPM-embedded copies already satisfy macOS app validation without a post-embed fix-up script. Both include the public librime C API headers but no module maps; the `Rime` Swift module is provided by the package's headers product. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
+### Platform minimums
+
+The artifacts target **iOS 15.0** and **macOS 11.0**. Those are not arbitrary: they are libc++'s minimum supported deployment targets, so building below them makes newer SDKs emit `"The selected platform is no longer supported by libc++."` That warning becomes an error in dependencies that compile with `-Werror` (leveldb does), which breaks the build rather than the consumer's. macOS 11.0 sits exactly on that line and needs no change; the iOS minimum is raised from 13.0, which predated it.
+
+An app linking these artifacts needs a deployment target at least as high; linking an object built for a newer OS than the app targets warns, and the XCFrameworks carry the minimums above.
+
 ## Swift Package
 
 Release tags contain a generated `Package.swift` with a headers target and binary targets that point at the matching GitHub Release assets.
@@ -82,6 +88,7 @@ Prerequisites:
 - CMake and Ninja
 - vcpkg, with `VCPKG_ROOT` pointing at the vcpkg checkout
 - upstream `librime` source at `../librime` or `vendor/librime`
+- plugin submodules initialized: `git submodule update --init --recursive`
 
 Build and package:
 
@@ -104,6 +111,48 @@ scripts/package-xcframework.sh
 
 Outputs are written to `out/` and `dist/`.
 
+## Merged Plugins
+
+The artifacts statically merge the Rime plugins that upstream ships in its own
+release builds, so consumers get them without loading anything at runtime:
+
+- `librime-lua` (module `lua`)
+- `librime-octagram` (module `octagram`)
+- `librime-predict` (module `predict`)
+
+Plugins live in `plugins/` as git submodules pinned to explicit commits, and
+`plugins.json` is the manifest the build reads. `scripts/prepare-plugins.sh`
+copies the checkouts into the upstream source tree, applies the per-plugin
+patches listed in the manifest, and verifies each license before the merge.
+
+`librime-lua` does not vendor its own Lua: the interpreter comes from the vcpkg
+`lua` port, and the plugin is patched to use `find_package(Lua)` instead of
+pkg-config. Keeping Lua in the dependency manifest means Apple platform patches
+and version pinning stay with the other dependencies.
+
+Two upstream behaviors matter for this arrangement:
+
+- Static linking needs help. Module registration happens in static
+  initializers, and a static linker drops those object files unless something
+  references them. `patches/0001-static-plugin-module-references.patch` brings
+  in upstream's fix for exactly this (upstream commit `cbf363be`, which landed
+  after the `1.17.0` tag), so plugin modules are force-referenced by
+  `rime_declare_module_dependencies()`.
+- Plugin upgrades change candidate behavior, and `librime-octagram` was
+  distributed under GPLv3 until it was relicensed to BSD 3-Clause in July 2026.
+  Pins are therefore explicit, Dependabot proposals are reviewed rather than
+  auto-merged, and the build refuses a plugin whose license text is not the
+  expected one.
+
+Plugin revisions are recorded in the release `build-metadata.json`, and license
+texts are collected into `third-party-notices.zip` under `plugins/`.
+
+The build merges the plugin modules and their runtime dependencies, but not
+plugin *data* or tools: the `octagram` and `predict` modules ship without a
+grammar/prediction database, and the plugin data generators are not built
+(`BUILD_TOOLS=OFF`). Deploy the matching data files with your schema, as you
+would with any other Rime distribution.
+
 ## Versioning
 
 Package versions use:
@@ -119,6 +168,25 @@ Example:
 ```text
 1.16.1-pack.1
 ```
+
+### Build-only runs
+
+The `build` workflow publishes by default: it commits the regenerated release
+manifest, pushes a tag, and creates the GitHub Release. To validate a branch or
+a release candidate without publishing anything, dispatch it with
+`publish: false`:
+
+```bash
+gh workflow run build.yml --ref my-branch \
+  -f upstream_ref=1.17.0 \
+  -f publish=false
+```
+
+A build-only run compiles every slice, packages the XCFrameworks, writes
+`build-metadata.json`, and uploads them as the run's `librime-xcframework`
+artifact, then stops. It does not commit the manifest, tag, or create a
+release. This is also the way to exercise the release pipeline against a change
+to the packaging scripts, because the workflow has no `pull_request` trigger.
 
 ## License
 

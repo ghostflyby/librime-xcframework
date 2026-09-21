@@ -7,6 +7,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Do not vendor long-term upstream source changes into this repository.
 - Keep upstream compatibility changes in `patches/*.patch` when they are needed.
 - CI should checkout the real upstream repository into `vendor/librime` without submodules.
+- The no-submodules rule is about not pulling in librime's vendored third-party dependency graph. It does not apply to the Rime plugins under `plugins/`, which are submodules pinned to explicit commits.
 - Treat the local sibling `../librime` repository, including any local `vcpkg` branch, as reference material only. Do not assume those local branches exist upstream.
 - Build scripts should resolve upstream source in this order: `UPSTREAM_SOURCE_DIR`, `vendor/librime`, then `../librime`.
 - Build scripts should build the current upstream checkout by default, or `UPSTREAM_REF` when provided.
@@ -25,6 +26,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 ## Packaging
 
 - Build `librime` as static libraries and dynamic frameworks for macOS and iOS.
+- Keep the deployment targets at or above libc++'s supported minimums (currently iOS 15.0, macOS 11.0). Newer SDKs warn below them, and that warning is fatal in dependencies that compile with `-Werror` such as leveldb.
 - Use upstream's existing `BUILD_STATIC=ON` CMake path.
 - Merge vcpkg static dependency archives into each per-architecture `librime.a`.
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.
@@ -37,9 +39,12 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Generate `RimeDynamicStub` skeleton frameworks from the released dynamic dylibs with `tapi stubify` — the tbd sits at the binary's position inside `RimeDynamic.framework` (deep `Versions/A` layout for macOS, flat for iOS) — and commit them under `Sources/RimeDynamicStub/<platform>` with the release manifest. The stub target exposes no API and contributes only the `-framework RimeDynamic` linker setting so extension-like targets can link without embedding.
 - Release artifacts should include `librime-static.xcframework.zip`, `librime-dynamic.xcframework.zip`, `LICENSE.txt`, `THIRD_PARTY_NOTICES.md`, `third-party-notices.zip`, and `build-metadata.json`. Do not generate a separate `.sha256` file because GitHub Releases exposes an asset digest.
 - Keep the repository license and binary distribution notices in sync with the release assets. The wrapper uses BSD 3-Clause, upstream `librime` is BSD 3-Clause, and vcpkg dependency copyright files should be collected into `third-party-notices.zip`.
+- Statically merge the Rime plugins carried in `plugins/` (git submodules whose revisions are the committed gitlinks described by `plugins.json`) into librime with `BUILD_MERGED_PLUGINS=ON` and `ENABLE_EXTERNAL_PLUGINS=OFF`; static builds must keep upstream's plugin module force-reference mechanism so the linker does not drop their registration objects.
+- Supply `librime-lua`'s interpreter from the vcpkg `lua` port rather than its vendored `thirdparty` checkout, and collect the plugins' license texts into `third-party-notices.zip` under `plugins/`. Verify each plugin's license text before merging, because `librime-octagram` was GPLv3 before its 2026-07 relicense.
 - Wrapper versions should use `<upstream-version>-pack.<packaging-revision>` so tags work naturally with SwiftPM version requirements.
 - In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`. When `packaging_revision` is also empty, choose the next available pack revision for manual builds; scheduled upstream checks should skip publishing if any pack release already exists for that upstream version.
 - The release workflow should generate `Package.swift` with direct `Rime`, `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, sync the `Sources/RimeHeaders` headers from the build outputs, commit both, and tag that commit before creating the GitHub Release.
+- The build workflow must keep a build-only mode (`publish: false`) that builds, packages, and uploads the distribution artifact but neither commits the release manifest nor creates a GitHub Release, so a branch or release candidate can be validated without publishing.
 
 ## Review
 

@@ -30,7 +30,7 @@ case "${slice}" in
     arch="arm64"
     platform="ios-arm64"
     triplet="arm64-ios-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphoneos"
     build_dynamic=1
@@ -39,7 +39,7 @@ case "${slice}" in
     arch="arm64"
     platform="ios-simulator-arm64"
     triplet="arm64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
     build_dynamic=1
@@ -48,7 +48,7 @@ case "${slice}" in
     arch="x86_64"
     platform="ios-simulator-x86_64"
     triplet="x64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
     build_dynamic=1
@@ -118,6 +118,15 @@ fi
 
 "${script_dir}/apply-patches.sh" "${source_work_dir}"
 
+export RIME_PLUGINS="$("${script_dir}/prepare-plugins.sh" "${source_work_dir}")"
+
+plugin_modules=(${RIME_PLUGINS})
+if [[ ${#plugin_modules[@]} -eq 0 ]]; then
+  printf 'no plugins were prepared; the artifacts are expected to merge the plugins from plugins.json\n' >&2
+  exit 1
+fi
+printf 'merging plugin modules: %s\n' "${plugin_modules[*]}"
+
 if [[ ! -f "${source_work_dir}/CMakeLists.txt" ]]; then
   printf 'selected source ref does not contain CMakeLists.txt: %s\n' "${source_work_dir}" >&2
   exit 1
@@ -180,7 +189,7 @@ collect_vcpkg_notices() {
   local share_dir copyright_file port_name destination
 
   rm -rf "${notices_dir}"
-  mkdir -p "${notices_dir}/vcpkg"
+  mkdir -p "${notices_dir}/vcpkg" "${notices_dir}/librime"
 
   for share_dir in "${static_build_dir}/vcpkg_installed/${triplet}/share" "${vcpkg_root}/installed/${triplet}/share"; do
     if [[ ! -d "${share_dir}" ]]; then
@@ -195,6 +204,29 @@ collect_vcpkg_notices() {
       fi
     done < <(find "${share_dir}" -mindepth 2 -maxdepth 2 -type f -name copyright -print0)
   done
+
+  collect_librime_bundled_notices "${notices_dir}/librime"
+}
+
+# Upstream librime compiles in two header-only libraries whose licenses are not
+# installed by upstream's CMake rules and are not vcpkg ports. Collect them from
+# the upstream source tree here, where it exists, so they travel with the slice
+# artifacts the same way the vcpkg notices do.
+collect_librime_bundled_notices() {
+  local destination_dir="$1"
+
+  if [[ -f "${source_work_dir}/include/COPYING.darts-clone" ]]; then
+    cp "${source_work_dir}/include/COPYING.darts-clone" "${destination_dir}/darts-clone.txt"
+  else
+    printf 'warning: darts-clone license text not found for the notices bundle\n' >&2
+  fi
+
+  if [[ -f "${source_work_dir}/include/utf8.h" ]]; then
+    sed -n '1,/^ \*\/$/p' "${source_work_dir}/include/utf8.h" \
+      | sed '1d;$d' > "${destination_dir}/utf8-cpp.txt"
+  else
+    printf 'warning: utf8-cpp license text not found for the notices bundle\n' >&2
+  fi
 }
 
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
@@ -225,6 +257,38 @@ fi
 
 cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" "${static_install_dir}/include/RimeShim.h"
 prune_exported_headers "${static_install_dir}/include"
+
+# Static linking drops module registration objects unless something references
+# them, and a dropped plugin leaves an artifact that still looks complete. Fail
+# loudly instead of shipping a plugin-less library.
+verify_merged_plugins() {
+  local library="$1"
+  local missing=() module symbols
+
+  if [[ ${#plugin_modules[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  symbols="$(nm -gU "${library}" 2>/dev/null || true)"
+  for module in "${plugin_modules[@]}"; do
+    # Match the C++ mangled forms, either plain or inside the rime namespace:
+    # __Z<len>rime_require_module_<module>v / __ZN4rime<len>rime_require_module_<module>Ev
+    # Use a here-string rather than a pipe: `grep -q` exits on the first match,
+    # and under `pipefail` the resulting SIGPIPE on the writer would fail the
+    # whole pipeline and report a present module as missing.
+    if ! grep -qE "rime_require_module_${module}(v|Ev)$" <<< "${symbols}"; then
+      missing+=("${module}")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf 'librime was built without merged plugin module(s): %s\n' "${missing[*]}" >&2
+    printf 'expected rime_require_module_* symbols in %s\n' "${library}" >&2
+    exit 1
+  fi
+  printf 'verified merged plugin modules in %s: %s\n' "${library}" "${plugin_modules[*]}"
+}
+
+verify_merged_plugins "${static_archive}"
 
 if [[ "${build_dynamic}" -eq 1 ]]; then
   configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON

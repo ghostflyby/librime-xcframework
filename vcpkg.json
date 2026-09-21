@@ -7,6 +7,7 @@
     "glog",
     "yaml-cpp",
     "leveldb",
+    "lua",
     "opencc",
     "marisa-trie",
     "boost-algorithm",
@@ -15,6 +16,7 @@
     "boost-regex",
     "boost-scope-exit",
     "boost-signals2",
-    "boost-uuid"
+    "boost-uuid",
+    "boost-vmd"
   ]
 }

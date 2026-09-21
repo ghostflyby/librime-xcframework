@@ -55,6 +55,56 @@ if command -v sw_vers >/dev/null 2>&1; then
   macos_version="$(sw_vers -productVersion)"
 fi
 
+plugin_entries=""
+manifest_path="${PLUGINS_MANIFEST:-${repo_root}/plugins.json}"
+if [[ -f "${manifest_path}" ]]; then
+  plugin_entries="$(python3 - "${manifest_path}" "${repo_root}" <<'PY'
+import json, subprocess, sys, re
+manifest, repo_root = sys.argv[1], sys.argv[2]
+
+
+def pinned_commit(path):
+    """Resolve the submodule revision recorded by this repository.
+
+    `git -C <submodule> rev-parse HEAD` is not usable here: on an uninitialized
+    submodule it walks up and reports the enclosing repository's HEAD, which
+    would record the wrapper's commit as the plugin's. Submodule status reports
+    the gitlink recorded in the repository, prefixed with '-' when the
+    submodule is not checked out.
+    """
+    result = subprocess.run(
+        ["git", "-C", repo_root, "submodule", "status", "--", path],
+        capture_output=True, text=True, check=True)
+    for line in result.stdout.splitlines():
+        match = re.match(r"\s*[-+U]?([0-9a-f]{40})\s+(\S+)", line)
+        if match and match.group(2) == path:
+            return match.group(1)
+    return "unknown"
+
+
+entries = []
+for plugin in json.load(open(manifest))["plugins"]:
+    commit = pinned_commit(plugin["path"])
+    url = plugin["url"]
+    repo = url.rsplit("github.com/", 1)[-1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    entries.append(
+        '    {\n'
+        f'      "name": {json.dumps(plugin["name"])},\n'
+        f'      "module": {json.dumps(plugin["module"])},\n'
+        f'      "repo": {json.dumps(repo)},\n'
+        f'      "commit": {json.dumps(commit)},\n'
+        f'      "license": {json.dumps(plugin["license"])}\n'
+        '    }')
+print(",\n".join(entries))
+PY
+)"
+fi
+if [[ -z "${plugin_entries}" ]]; then
+  plugin_entries=""
+fi
+
 cat > "${output_path}" <<JSON
 {
   "packaging_version": "$(json_escape "${packaging_version}")",
@@ -65,6 +115,9 @@ cat > "${output_path}" <<JSON
   "packaging_commit": "$(json_escape "${packaging_commit}")",
   "xcode_version": "$(json_escape "${xcode_version}")",
   "runner_macos_version": "$(json_escape "${macos_version}")",
+  "plugins": [
+${plugin_entries}
+  ],
   "artifacts": [
     "librime-static.xcframework.zip",
     "librime-dynamic.xcframework.zip",

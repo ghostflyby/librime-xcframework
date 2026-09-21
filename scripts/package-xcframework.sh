@@ -192,12 +192,14 @@ copy_distribution_notices() {
   cp "${repo_root}/LICENSE" "${license_output_path}"
   cp "${repo_root}/THIRD_PARTY_NOTICES.md" "${third_party_notice_output_path}"
 
-  mkdir -p "${third_party_notice_bundle_path}/vcpkg"
+  mkdir -p "${third_party_notice_bundle_path}/vcpkg" "${third_party_notice_bundle_path}/librime"
   cat > "${notices_readme_path}" <<'README'
 # Third-Party Dependency Notices
 
 This directory contains vcpkg-provided license texts for third-party dependency
-code that may be linked into the librime XCFramework binary artifacts.
+code that may be linked into the librime XCFramework binary artifacts, plus the
+license texts of the Rime plugins statically merged into librime (see
+`plugins/`).
 
 The release also includes LICENSE.txt for this packaging wrapper and
 THIRD_PARTY_NOTICES.md for the upstream librime notice.
@@ -210,6 +212,26 @@ README
       cp "${notice_file}" "${destination}"
     fi
   done < <(find "${out_dir}" -path '*/notices/vcpkg/*.txt' -type f -print0)
+
+  while IFS= read -r -d '' notice_file; do
+    name="$(basename "${notice_file}" .txt)"
+    destination="${third_party_notice_bundle_path}/librime/${name}.txt"
+    if [[ ! -f "${destination}" ]]; then
+      cp "${notice_file}" "${destination}"
+    fi
+  done < <(find "${out_dir}" -path '*/notices/librime/*.txt' -type f -print0)
+
+  "${script_dir}/collect-plugin-notices.sh" "${third_party_notice_bundle_path}"
+
+  # Every slice ships its own notices/, so a missing category means the bundle
+  # would silently under-report what the binaries contain.
+  local category
+  for category in vcpkg librime plugins; do
+    if [[ -z "$(find "${third_party_notice_bundle_path}/${category}" -type f -print -quit 2>/dev/null)" ]]; then
+      printf 'third-party notices bundle has no %s license texts; was a slice built?\n' "${category}" >&2
+      exit 1
+    fi
+  done
 }
 
 rsync -a --delete "${arm64_static_headers}/" "${static_universal_headers}/"
@@ -237,8 +259,8 @@ lipo -create \
   -output "${ios_simulator_dynamic_universal_lib}"
 
 create_macos_dynamic_framework "${macos_dynamic_framework}" "${dynamic_universal_lib}" "${dynamic_universal_headers}" "11.0"
-create_dynamic_framework "${ios_device_dynamic_framework}" "${ios_device_dynamic_lib}" "${ios_device_dynamic_headers}" "13.0"
-create_dynamic_framework "${ios_simulator_dynamic_framework}" "${ios_simulator_dynamic_universal_lib}" "${ios_simulator_arm64_dynamic_headers}" "13.0"
+create_dynamic_framework "${ios_device_dynamic_framework}" "${ios_device_dynamic_lib}" "${ios_device_dynamic_headers}" "15.0"
+create_dynamic_framework "${ios_simulator_dynamic_framework}" "${ios_simulator_dynamic_universal_lib}" "${ios_simulator_arm64_dynamic_headers}" "15.0"
 
 xcodebuild -create-xcframework \
   -framework "${macos_dynamic_framework}" \

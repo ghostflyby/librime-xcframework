@@ -13,3 +13,10 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
