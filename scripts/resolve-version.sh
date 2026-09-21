@@ -18,11 +18,12 @@ fi
 packaging_version="${PACKAGING_VERSION:-}"
 
 upstream_repo="${UPSTREAM_REPO:-rime/librime}"
+# "worktree" is what build-one-arch.sh exports when it built the checkout
+# rather than a ref; anything else is a ref that was resolved before building.
 upstream_ref="${UPSTREAM_REF:-}"
-if [[ -z "${upstream_ref}" && -d "${source_dir}/.git" ]]; then
-  upstream_ref="HEAD"
+if [[ -z "${upstream_ref}" ]]; then
+  upstream_ref="worktree"
 fi
-upstream_ref="${upstream_ref:-HEAD}"
 
 upstream_version="unknown"
 if [[ -f "${source_dir}/CMakeLists.txt" ]]; then
@@ -35,7 +36,12 @@ if [[ -d "${source_dir}/.git" ]]; then
   if git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}" >/dev/null 2>&1; then
     upstream_commit="$(git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}")"
   elif git -C "${source_dir}" rev-parse HEAD >/dev/null 2>&1; then
+    # A worktree build: the content is HEAD plus whatever is uncommitted, so a
+    # bare commit hash would overstate how reproducible this build is.
     upstream_commit="$(git -C "${source_dir}" rev-parse HEAD)"
+    if [[ -n "$(git -C "${source_dir}" status --porcelain 2>/dev/null)" ]]; then
+      upstream_commit="${upstream_commit}-dirty"
+    fi
   fi
 fi
 

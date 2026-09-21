@@ -35,8 +35,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       VCPKG_BINARY_CACHE_DIR: ${{ github.workspace }}/.vcpkg-binary-cache
+      # `clear;` drops the default sources, so the files-based source below is
+      # the only one and states its path explicitly. That makes
+      # VCPKG_DEFAULT_BINARY_CACHE redundant - it configures where the *default*
+      # source would cache, and there is no default source left.
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-binary-cache
     strategy:
       fail-fast: false
       matrix:
@@ -107,16 +110,6 @@ jobs:
           UPSTREAM_REF: ${{ steps.resolve-upstream.outputs.ref }}
           PACKAGING_VERSION: ${{ inputs.packaging_version }}
         run: scripts/build-one-arch.sh ${{ matrix.slice }}
-
-      - name: Resolve source metadata
-        run: |
-          scripts/resolve-version.sh --env >> "${GITHUB_ENV}"
-          scripts/resolve-version.sh --env > "out/${{ matrix.platform }}/source.env"
-        env:
-          UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
-          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ steps.resolve-upstream.outputs.ref }}
-          PACKAGING_VERSION: ${{ inputs.packaging_version }}
 
       - name: Upload slice
         uses: actions/upload-artifact@v7
@@ -213,33 +206,18 @@ jobs:
       - name: Package XCFramework
         run: scripts/package-xcframework.sh
 
+      # The package step already refreshed the committed headers and stub
+      # skeletons; what is left is the release URL, which only exists here.
+      # PACKAGING_VERSION was exported by the "Resolve packaging version" step.
       - name: Generate SwiftPM manifest
         run: |
+          release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGING_VERSION}"
           static_checksum="$(swift package compute-checksum dist/librime-static.xcframework.zip)"
           dynamic_checksum="$(swift package compute-checksum dist/librime-dynamic.xcframework.zip)"
-          release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGING_VERSION}"
           scripts/write-package-swift.sh \
             "${release_base_url}/librime-static.xcframework.zip" "${static_checksum}" \
             "${release_base_url}/librime-dynamic.xcframework.zip" "${dynamic_checksum}" \
             Package.swift
-          rsync -a --delete --exclude module.modulemap out/macos-arm64/dynamic/include/ Sources/RimeHeaders/include/
-          cat > Sources/RimeHeaders/include/module.modulemap <<'MODULEMAP'
-          module Rime {
-            umbrella header "RimeShim.h"
-            export *
-          }
-          MODULEMAP
-          printf '#include "RimeShim.h"\n' > "${RUNNER_TEMP}/rime-module-smoke.c"
-          xcrun clang -fmodules -fsyntax-only -I Sources/RimeHeaders/include "${RUNNER_TEMP}/rime-module-smoke.c"
-          # The header sync above deletes files absent from the build output, so
-          # this also proves Rime.apinotes travelled with the artifacts and that
-          # the un-suffixed Swift names still resolve.
-          scripts/verify-swift-names.sh
-          for platform in macos ios ios-simulator; do
-            rm -rf "Sources/RimeDynamicStub/${platform}"
-            mkdir -p "Sources/RimeDynamicStub/${platform}"
-            cp -R "out/linker-stubs/${platform}/RimeDynamic.framework" "Sources/RimeDynamicStub/${platform}/RimeDynamic.framework"
-          done
 
       - name: Write build metadata
         run: scripts/write-build-metadata.sh dist/build-metadata.json

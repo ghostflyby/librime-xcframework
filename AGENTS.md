@@ -9,8 +9,8 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - CI should checkout the real upstream repository into `vendor/librime` without submodules.
 - The no-submodules rule is about not pulling in librime's vendored third-party dependency graph. It does not apply to the Rime plugins under `plugins/`, which are submodules pinned to explicit commits.
 - Treat the local sibling `../librime` repository, including any local `vcpkg` branch, as reference material only. Do not assume those local branches exist upstream.
-- Build scripts should resolve upstream source in this order: `UPSTREAM_SOURCE_DIR`, `vendor/librime`, then `../librime`.
-- Build scripts should build the current upstream checkout by default, or `UPSTREAM_REF` when provided.
+- Build scripts should resolve upstream source in this order: `UPSTREAM_SOURCE_DIR`, `vendor/librime`, then `../librime`. `vendor/librime` may be a symlink to a development checkout; builds must only read it (export to a work directory), never write into it.
+- Build scripts should build the upstream working tree by default, or the committed content of `UPSTREAM_REF` when provided; an unresolvable `UPSTREAM_REF` must fail rather than fall back.
 
 ## Dependencies
 
@@ -18,6 +18,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Use overlay ports in `ports/` when a third-party dependency needs packaging-only fixes for Apple targets.
 - Set up CMake and Ninja in CI with `lukka/get-cmake`.
 - Set up vcpkg in CI with `lukka/run-vcpkg`.
+- Require `VCPKG_ROOT` from the environment; do not add a fallback that looks for a vcpkg checkout inside this repository, and do not clone vcpkg into it. A silent fallback hides a missing environment dependency and invites a repo-local checkout that then has to be maintained.
 - Use vcpkg's `files` binary cache source with `actions/cache`; do not rely on the removed `x-gha` backend.
 - Keep the vcpkg `builtin-baseline` only in `vcpkg.json`. Do not duplicate it in workflow environment variables.
 - Let Dependabot update the vcpkg baseline and GitHub Actions versions.

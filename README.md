@@ -106,7 +106,8 @@ Prerequisites:
 - macOS with Xcode command line tools
 - CMake and Ninja
 - vcpkg, with `VCPKG_ROOT` pointing at the vcpkg checkout
-- upstream `librime` source at `../librime` or `vendor/librime`
+- upstream `librime` source at `../librime` or `vendor/librime` (`vendor/librime`
+  may be a symlink to a development checkout; builds only read it)
 - plugin submodules initialized: `git submodule update --init --recursive`
 
 Build and package:
@@ -128,7 +129,22 @@ Package existing slice outputs:
 scripts/package-xcframework.sh
 ```
 
-Outputs are written to `out/` and `dist/`.
+Packaging also refreshes the sources this repository commits — the public
+headers under `Sources/RimeHeaders/include` and the `RimeDynamicStub`
+skeletons — so they always match the artifacts that were just produced.
+`VCPKG_ROOT` is required (there is no in-repo vcpkg fallback) and `cmake` and
+`ninja` must be on `PATH`.
+
+Outputs are written to `out/` and `dist/`. Each slice also gets a `source.env`
+recording the resolved upstream repo/ref/version/commit, which is what the
+packaging job reads from the downloaded slices.
+
+With no `UPSTREAM_REF`, the upstream **working tree** is built, so uncommitted
+edits in a development checkout are what gets compiled; `UPSTREAM_REF` builds
+that ref's committed content instead, and an unresolvable ref is an error. A
+worktree build records `UPSTREAM_REF=worktree` and appends `-dirty` to the
+commit when the tree is not clean, so the metadata does not overstate how
+reproducible the build is.
 
 ## Merged Plugins
 

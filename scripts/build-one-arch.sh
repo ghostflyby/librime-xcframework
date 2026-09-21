@@ -84,20 +84,27 @@ if [[ -z "${source_dir}" ]]; then
   fi
 fi
 
+# Source selection. With no UPSTREAM_REF the working tree is built, so an
+# in-progress edit under a development checkout is what gets compiled; with an
+# explicit UPSTREAM_REF that ref's committed content is built, and an
+# unresolvable ref is an error rather than a silent fallback to the checkout.
 upstream_ref="${UPSTREAM_REF:-}"
-if [[ -z "${upstream_ref}" && -d "${source_dir}/.git" ]]; then
-  upstream_ref="HEAD"
+if [[ -z "${upstream_ref}" ]]; then
+  build_from_worktree=1
+  upstream_ref="worktree"
+elif [[ -d "${source_dir}/.git" ]] && git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}" >/dev/null 2>&1; then
+  build_from_worktree=0
+else
+  printf 'cannot resolve UPSTREAM_REF=%s in %s\n' "${upstream_ref}" "${source_dir}" >&2
+  exit 1
 fi
-upstream_ref="${upstream_ref:-HEAD}"
+# resolve-version.sh records what was built, so it needs the same answer.
+export UPSTREAM_REF="${upstream_ref}"
 
 vcpkg_root="${VCPKG_ROOT:-}"
 if [[ -z "${vcpkg_root}" ]]; then
-  if [[ -d "${repo_root}/vcpkg/scripts/buildsystems" ]]; then
-    vcpkg_root="${repo_root}/vcpkg"
-  else
-    printf 'VCPKG_ROOT is required, or checkout vcpkg into %s/vcpkg.\n' "${repo_root}" >&2
-    exit 1
-  fi
+  printf 'VCPKG_ROOT is required: point it at a vcpkg checkout.\n' >&2
+  exit 1
 fi
 
 if [[ ! -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake" ]]; then
@@ -105,14 +112,23 @@ if [[ ! -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake" ]]; then
   exit 1
 fi
 
+# The toolchain is provided by the CI environment and assumed locally, so name
+# what is missing instead of letting cmake fail with its own wording.
+for tool in cmake ninja; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    printf 'required tool not found in PATH: %s\n' "${tool}" >&2
+    exit 1
+  fi
+done
+
 rm -rf "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${install_dir}"
 mkdir -p "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${static_install_dir}" "${dynamic_install_dir}"
 
-if [[ -d "${source_dir}/.git" ]] && git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}" >/dev/null 2>&1; then
+if [[ "${build_from_worktree}" -eq 0 ]]; then
   printf 'exporting %s from %s\n' "${upstream_ref}" "${source_dir}"
   git -C "${source_dir}" archive "${upstream_ref}" | tar -x -C "${source_work_dir}"
 else
-  printf 'copying current source checkout from %s\n' "${source_dir}"
+  printf 'copying working tree from %s\n' "${source_dir}"
   rsync -a --delete --exclude .git "${source_dir}/" "${source_work_dir}/"
 fi
 
@@ -365,5 +381,10 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
 fi
 
 collect_vcpkg_notices "${install_dir}/notices"
+
+# Record the resolved inputs next to the slice output. The packaging job reads
+# this from the downloaded slice (it has no upstream checkout of its own), and a
+# local run gets the same file, so both paths describe a build the same way.
+"${script_dir}/resolve-version.sh" --env > "${install_dir}/source.env"
 
 printf 'built %s at %s\n' "${platform}" "${install_dir}"
