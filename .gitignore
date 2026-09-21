@@ -6,4 +6,5 @@ vcpkg/
 *.xcframework
 *.xcframework.zip
 *.sha256
-
+# IDE project files are not part of the distribution
+.idea/

@@ -134,9 +134,15 @@ fi
 
 "${script_dir}/apply-patches.sh" "${source_work_dir}"
 
-export RIME_PLUGINS="$("${script_dir}/prepare-plugins.sh" "${source_work_dir}")"
+# Assigned separately from the export: a `export VAR="$(cmd)"` reports the
+# export's own status, which would hide a failing prepare-plugins.sh - the step
+# that copies the plugins in and verifies their licenses.
+RIME_PLUGINS="$("${script_dir}/prepare-plugins.sh" "${source_work_dir}")"
+export RIME_PLUGINS
 
-plugin_modules=(${RIME_PLUGINS})
+# read -a rather than an unquoted expansion: the module list is space separated,
+# and bash 3.2 (the macOS default) has no mapfile.
+read -r -a plugin_modules <<< "${RIME_PLUGINS}"
 if [[ ${#plugin_modules[@]} -eq 0 ]]; then
   printf 'no plugins were prepared; the artifacts are expected to merge the plugins from plugins.json\n' >&2
   exit 1
