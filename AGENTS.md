@@ -44,6 +44,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Wrapper versions should use `<upstream-version>-pack.<packaging-revision>` so tags work naturally with SwiftPM version requirements.
 - In release workflows, empty `upstream_ref` should resolve to the latest upstream release tag, and empty `packaging_version` should be inferred from the resolved upstream version plus `packaging_revision`. When `packaging_revision` is also empty, choose the next available pack revision for manual builds; scheduled upstream checks should skip publishing if any pack release already exists for that upstream version.
 - The release workflow should generate `Package.swift` with direct `Rime`, `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, sync the `Sources/RimeHeaders` headers from the build outputs, commit both, and tag that commit before creating the GitHub Release.
+- The build workflow must keep a build-only mode (`publish: false`) that builds, packages, and uploads the distribution artifact but neither commits the release manifest nor creates a GitHub Release, so a branch or release candidate can be validated without publishing.
 
 ## Review
 

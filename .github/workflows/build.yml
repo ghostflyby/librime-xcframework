@@ -19,6 +19,11 @@ on:
         description: Release tag for this packaged artifact. Leave empty to infer it from the upstream version.
         required: false
         default: ""
+      publish:
+        description: Publish the GitHub Release and commit the release manifest. Set to false for a build-only run that stops after uploading the distribution artifact.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -232,7 +237,14 @@ jobs:
             cp -R "out/linker-stubs/${platform}/RimeDynamic.framework" "Sources/RimeDynamicStub/${platform}/RimeDynamic.framework"
           done
 
+      - name: Write build metadata
+        run: scripts/write-build-metadata.sh dist/build-metadata.json
+
+      # Compared against true rather than used directly: a string "false" is
+      # truthy in GitHub expressions, and the failure mode of a publish gate
+      # must be "did not publish", never "published when told not to".
       - name: Commit and tag release manifest
+        if: ${{ inputs.publish == true }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/${PACKAGING_VERSION}" >/dev/null 2>&1; then
             echo "tag already exists: ${PACKAGING_VERSION}; skipping manifest commit and tag."
@@ -256,8 +268,6 @@ jobs:
             git push origin "refs/tags/${PACKAGING_VERSION}"
           fi
 
-          scripts/write-build-metadata.sh dist/build-metadata.json
-
       - name: Upload distribution artifact
         uses: actions/upload-artifact@v7
         with:
@@ -271,6 +281,7 @@ jobs:
             dist/build-metadata.json
 
       - name: Publish release
+        if: ${{ inputs.publish == true }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -280,3 +291,16 @@ jobs:
           else
             gh release create "${PACKAGING_VERSION}" dist/librime-static.xcframework.zip dist/librime-dynamic.xcframework.zip dist/LICENSE.txt dist/THIRD_PARTY_NOTICES.md dist/third-party-notices.zip dist/build-metadata.json --title "${PACKAGING_VERSION}" --notes "${notes}"
           fi
+
+      - name: Summarize run
+        if: ${{ inputs.publish != true }}
+        run: |
+          {
+            echo "### Build-only run: nothing was published"
+            echo
+            echo "Packaged \`${UPSTREAM_REPO}@${UPSTREAM_REF}\` as \`${PACKAGING_VERSION}\`."
+            echo
+            echo "The release manifest was not committed, no tag was pushed, and no GitHub Release was created."
+            echo "Download the \`librime-xcframework\` artifact from this run to inspect the packaged zips."
+            echo "Because the run is not publishing, \`Package.swift\` in the checkout points at a release that does not exist yet."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -65,6 +65,7 @@ jobs:
           workflow_args=(
             -f upstream_repo="${UPSTREAM_REPO}"
             -f upstream_ref="${latest_tag}"
+            -f publish=true
           )
           if [[ -n "${PACKAGING_REVISION}" ]]; then
             workflow_args+=(-f packaging_revision="${PACKAGING_REVISION}")

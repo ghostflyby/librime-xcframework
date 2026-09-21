@@ -169,6 +169,25 @@ Example:
 1.16.1-pack.1
 ```
 
+### Build-only runs
+
+The `build` workflow publishes by default: it commits the regenerated release
+manifest, pushes a tag, and creates the GitHub Release. To validate a branch or
+a release candidate without publishing anything, dispatch it with
+`publish: false`:
+
+```bash
+gh workflow run build.yml --ref my-branch \
+  -f upstream_ref=1.17.0 \
+  -f publish=false
+```
+
+A build-only run compiles every slice, packages the XCFrameworks, writes
+`build-metadata.json`, and uploads them as the run's `librime-xcframework`
+artifact, then stops. It does not commit the manifest, tag, or create a
+release. This is also the way to exercise the release pipeline against a change
+to the packaging scripts, because the workflow has no `pull_request` trigger.
+
 ## License
 
 The packaging wrapper code in this repository is licensed under the BSD
