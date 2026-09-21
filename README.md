@@ -17,6 +17,12 @@ A release contains:
 
 The static XCFramework contains macOS arm64/x86_64, iOS device arm64, and iOS simulator arm64/x86_64 library slices. The dynamic XCFramework contains `RimeDynamic.framework` slices for macOS, iOS device, and iOS simulator. The macOS slice is a versioned deep bundle (`Versions/A`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic`) so SwiftPM-embedded copies already satisfy macOS app validation without a post-embed fix-up script. Both include the public librime C API headers but no module maps; the `Rime` Swift module is provided by the package's headers product. GitHub Releases exposes the SHA-256 digest for each uploaded asset.
 
+### Platform minimums
+
+The artifacts target **iOS 15.0** and **macOS 11.0**. Those are not arbitrary: they are libc++'s minimum supported deployment targets, so building below them makes newer SDKs emit `"The selected platform is no longer supported by libc++."` That warning becomes an error in dependencies that compile with `-Werror` (leveldb does), which breaks the build rather than the consumer's. macOS 11.0 sits exactly on that line and needs no change; the iOS minimum is raised from 13.0, which predated it.
+
+An app linking these artifacts needs a deployment target at least as high; linking an object built for a newer OS than the app targets warns, and the XCFrameworks carry the minimums above.
+
 ## Swift Package
 
 Release tags contain a generated `Package.swift` with a headers target and binary targets that point at the matching GitHub Release assets.

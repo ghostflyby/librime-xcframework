@@ -5,7 +5,7 @@ let package = Package(
     name: "Librime",
     platforms: [
         .macOS(.v11),
-        .iOS(.v13)
+        .iOS(.v15)
     ],
     products: [
         .library(name: "Rime", targets: ["RimeHeaders"]),

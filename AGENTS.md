@@ -26,6 +26,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 ## Packaging
 
 - Build `librime` as static libraries and dynamic frameworks for macOS and iOS.
+- Keep the deployment targets at or above libc++'s supported minimums (currently iOS 15.0, macOS 11.0). Newer SDKs warn below them, and that warning is fatal in dependencies that compile with `-Werror` such as leveldb.
 - Use upstream's existing `BUILD_STATIC=ON` CMake path.
 - Merge vcpkg static dependency archives into each per-architecture `librime.a`.
 - Combine macOS arm64 and x86_64 archives into one universal macOS static library before creating the XCFramework.

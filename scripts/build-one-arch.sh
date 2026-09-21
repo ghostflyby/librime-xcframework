@@ -30,7 +30,7 @@ case "${slice}" in
     arch="arm64"
     platform="ios-arm64"
     triplet="arm64-ios-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphoneos"
     build_dynamic=1
@@ -39,7 +39,7 @@ case "${slice}" in
     arch="arm64"
     platform="ios-simulator-arm64"
     triplet="arm64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
     build_dynamic=1
@@ -48,7 +48,7 @@ case "${slice}" in
     arch="x86_64"
     platform="ios-simulator-x86_64"
     triplet="x64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-13.0}"
+    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
     cmake_system_name="iOS"
     osx_sysroot="iphonesimulator"
     build_dynamic=1
