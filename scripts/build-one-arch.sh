@@ -206,17 +206,32 @@ prune_exported_headers() {
   rm -f "${include_dir}/rime_api_deprecated.h"
 }
 
-# Copy the files this repository owns into the exported include directory, so
-# they travel with the build output. The release pipeline syncs that directory
-# into Sources/RimeHeaders/include/, and because that sync deletes files absent
-# from the source it would otherwise remove them from the package.
+# Copy the shim this repository owns into the exported include directory, so it
+# travels with the build output. The release pipeline syncs that directory into
+# Sources/RimeHeaders/include/, and because that sync deletes files absent from
+# the source it would otherwise remove the shim from the package. The API notes
+# are not copied here: install_wrapper_apinotes renders them from these headers.
 install_wrapper_headers() {
   local include_dir="$1"
 
   cp "${repo_root}/Sources/RimeHeaders/include/RimeShim.h" \
     "${include_dir}/RimeShim.h"
-  cp "${repo_root}/Sources/RimeHeaders/include/Rime.apinotes" \
-    "${include_dir}/Rime.apinotes"
+}
+
+# Render the API notes from the headers actually being exported, rather than
+# copying the committed file: the notes annotate exactly what sits next to them,
+# so a flavored declaration upstream adds is covered in the artifacts even before
+# the committed copy is refreshed, and a published slice cannot carry notes that
+# disagree with its own headers.
+#
+# Must run after prune_exported_headers and install_plugin_headers: the notes
+# describe the final export set, and a header that is pruned or not yet installed
+# must not contribute an entry for a declaration the slice does not ship.
+install_wrapper_apinotes() {
+  local include_dir="$1"
+
+  "${repo_root}/scripts/sync-apinotes.sh" --print --headers "${include_dir}" \
+    > "${include_dir}/Rime.apinotes"
 }
 
 # Public headers of the plugins carried in this repository. They live outside
@@ -339,6 +354,7 @@ fi
 install_wrapper_headers "${static_install_dir}/include"
 prune_exported_headers "${static_install_dir}/include"
 install_plugin_headers "${static_install_dir}/include"
+install_wrapper_apinotes "${static_install_dir}/include"
 
 # Static linking drops module registration objects unless something references
 # them, and a dropped plugin leaves an artifact that still looks complete. Fail
@@ -384,6 +400,7 @@ if [[ "${build_dynamic}" -eq 1 ]]; then
   install_wrapper_headers "${dynamic_install_dir}/include"
   prune_exported_headers "${dynamic_install_dir}/include"
   install_plugin_headers "${dynamic_install_dir}/include"
+  install_wrapper_apinotes "${dynamic_install_dir}/include"
 fi
 
 collect_vcpkg_notices "${install_dir}/notices"

@@ -251,6 +251,13 @@ sync_repository_sources() {
   local headers_dir="${repo_root}/Sources/RimeHeaders/include"
   local smoke_dir
 
+  # The artifact's own notes are validated before anything is copied over the
+  # committed ones: the shipped XCFramework must carry notes that match its
+  # headers, and rendering a fresh file first would make that check pass
+  # regardless. Reading the build output directly also keeps a failure from
+  # leaving the tracked file deleted or replaced in the working tree.
+  "${script_dir}/sync-apinotes.sh" --check --headers "${arm64_dynamic_headers}"
+
   # --delete is deliberate: the committed headers must be exactly what the
   # artifacts carry, so a header that disappeared from the build output must
   # disappear here too. module.modulemap is excluded because it is written by
@@ -272,9 +279,13 @@ MODULEMAP
   xcrun clang -fmodules -fsyntax-only -I "${headers_dir}" "${smoke_dir}/rime-module-smoke.c"
   rm -rf "${smoke_dir}"
 
+  # Both committed copies then follow the synced set, so a release cannot tag one
+  # copy of the file while the other describes different headers.
+  "${script_dir}/sync-apinotes.sh" --headers "${headers_dir}"
+
   # The sync above deletes files absent from the build output, so this also
   # proves Rime.apinotes travelled with the artifacts and that the un-suffixed
-  # Swift names still resolve.
+  # Swift names still resolve against them.
   "${script_dir}/verify-swift-names.sh" "${headers_dir}"
 
   printf 'synced repository sources: headers\n'

@@ -8,7 +8,16 @@ set -euo pipefail
 # so a rename can regress silently. This probe compiles a snippet against the
 # headers and fails if the plain names are missing.
 #
+# The names probed here are not hardcoded: scripts/sync-apinotes.sh collects
+# every declaration the headers flavor and emits both the notes and these
+# probes, so a new flavored type in a header is covered without anyone
+# remembering to extend the list. That matters because the missing-entry failure
+# is invisible - the suffixed name simply stays in the Swift interface.
+#
 # Usage: verify-swift-names.sh [include-dir]
+#
+# The directory must hold the module map as well as the headers: the probes
+# import the module rather than the individual headers.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
@@ -19,31 +28,44 @@ if [[ ! -d "${include_dir}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${include_dir}/module.modulemap" ]]; then
+  # The artifacts deliberately carry no module map, so a slice's include
+  # directory is not a valid target for this probe; say so rather than letting
+  # the probes fail with 'no such module Rime'.
+  printf 'no module.modulemap in %s; this probe needs a module to import\n' \
+    "${include_dir}" >&2
+  printf 'point it at Sources/RimeHeaders/include or a synced copy of it\n' >&2
+  exit 1
+fi
+
 if [[ ! -f "${include_dir}/Rime.apinotes" ]]; then
   printf 'missing API notes: %s/Rime.apinotes\n' "${include_dir}" >&2
-  printf 'Swift consumers would see the _stdbool suffixed names again\n' >&2
+  printf 'Swift consumers would see the flavored (suffixed) names again\n' >&2
   exit 1
 fi
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "${scratch}"' EXIT
 
-# Every name the API notes are expected to provide, plus the suffixed spelling
-# that must no longer resolve.
-cat > "${scratch}/probe.swift" <<'SWIFT'
-import Rime
+# The collected notes must describe the headers they sit next to. A header that
+# gained a flavored declaration and left the notes behind fails here instead of
+# shipping a type whose suffix leaked into the Swift interface.
+if ! "${script_dir}/sync-apinotes.sh" --check --headers "${include_dir}" \
+    > "${scratch}/notes-check.log" 2>&1; then
+  # Not necessarily staleness: the captured output carries the real cause (a
+  # missing file, headers clang cannot parse, a missing tool), so print it whole
+  # rather than asserting a reason.
+  printf 'API notes do not match the headers in %s:\n' "${include_dir}" >&2
+  sed 's/^/  /' "${scratch}/notes-check.log" >&2
+  exit 1
+fi
 
-// Renamed types.
-let api = RimeApi.self
-let menu = RimeMenu.self
-let context = RimeContext.self
-let status = RimeStatus.self
-let levers = RimeLeversApi.self
-// Renamed entry point.
-let entry = rime_get_api.self
-
-_ = (api, menu, context, status, levers, entry)
-SWIFT
+# Every name the API notes are expected to provide. Emitted by the collector, so
+# this grows with the headers rather than with someone's memory.
+{
+  printf 'import Rime\n\n'
+  "${script_dir}/sync-apinotes.sh" --print-probe plain --headers "${include_dir}"
+} > "${scratch}/probe.swift"
 
 # Compile only: a systemLibrary target has no implementation to link against.
 if ! xcrun swiftc -typecheck "${scratch}/probe.swift" -I "${include_dir}" \
@@ -53,20 +75,109 @@ if ! xcrun swiftc -typecheck "${scratch}/probe.swift" -I "${include_dir}" \
   exit 1
 fi
 
-# The suffixed spellings must be gone, otherwise the rename did not apply and
-# the probe above may have passed on a stale module cache.
-cat > "${scratch}/stale.swift" <<'SWIFT'
-import Rime
-_ = RimeApi_stdbool.self
-SWIFT
+# The C spellings must be gone from what Swift sees. Asked of the interface as
+# Clang and the importer present it rather than by compiling one probe per name:
+# a single flavored declaration missing from the notes would otherwise pass,
+# since a probe with many errors fails whether one error or all of them are the
+# rename mistakes. Both directions are checked: every name the notes claim to
+# rename must be absent, and no name carrying the flavor suffix may survive -
+# the second catches a declaration the collector never saw, including one
+# reached through a header the shim does not include.
+flavor_suffix="$("${script_dir}/sync-apinotes.sh" --print-flavor-suffix \
+  --headers "${include_dir}")"
+"${script_dir}/sync-apinotes.sh" --print-probe names --headers "${include_dir}" \
+  > "${scratch}/renamed-c-names.txt"
 
-if xcrun swiftc -typecheck "${scratch}/stale.swift" -I "${include_dir}" \
-    > /dev/null 2>&1; then
-  printf 'RimeApi_stdbool still resolves; the API notes were not applied\n' >&2
+if ! xcrun swift-api-digester -dump-sdk -module Rime -I "${include_dir}" \
+    -o "${scratch}/swift-interface.json" 2> "${scratch}/digester.log"; then
+  printf 'could not dump the Swift interface of module Rime:\n' >&2
+  sed 's/^/  /' "${scratch}/digester.log" >&2
   exit 1
 fi
 
-printf 'swift name probe passed: un-suffixed names resolve, suffixed names are rejected\n'
+scan_status=0
+python3 - "${scratch}/swift-interface.json" "${flavor_suffix}" \
+  "${scratch}/renamed-c-names.txt" > "${scratch}/leftovers.log" \
+  2> "${scratch}/scan-error.log" <<'PY' || scan_status=$?
+import json
+import sys
+
+try:
+    interface = json.load(open(sys.argv[1]))
+    suffix = sys.argv[2]
+    claimed = [line for line in open(sys.argv[3]).read().splitlines() if line]
+except Exception as error:  # noqa: BLE001 - reported as a tool failure below
+    print(f"could not read the scan inputs: {error}", file=sys.stderr)
+    raise SystemExit(3)
+
+visible = set()
+
+
+def walk(node):
+    if isinstance(node, dict):
+        # Imports name modules, not the declarations the notes cover
+        # (`_Builtin_stdbool` is the Swift standard library's).
+        if node.get("kind") != "Import":
+            for key in ("name", "printedName"):
+                value = node.get(key)
+                if isinstance(value, str):
+                    visible.add(value)
+        for value in node.values():
+            walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(value)
+
+
+walk(interface)
+
+# A module that failed to load still lets the digester exit 0 with no
+# declarations, and a scan over nothing finds nothing: without this, the checks
+# below would pass precisely when the headers stopped being readable at all.
+if not any(name.startswith("rime") or name.startswith("Rime") for name in visible):
+    print("the dumped interface contains no librime declarations")
+    print("the module did not load, so this scan would be vacuous")
+    raise SystemExit(2)
+
+leftovers = sorted(set(claimed) & visible)
+leftovers += sorted(name for name in visible
+                    if suffix in name and not name.startswith("_Builtin"))
+if leftovers:
+    for name in dict.fromkeys(leftovers):
+        print(name)
+    raise SystemExit(1)
+PY
+
+# Distinct statuses, because a crash here must not be reported as a rename
+# failure: 1 is leftovers found, 2 is a vacuous scan, 3 is the scan itself
+# failing, and anything else is the interpreter never running.
+case "${scan_status}" in
+  0) ;;
+  1)
+    printf 'these C names were not renamed for Swift consumers:\n' >&2
+    sed 's/^/  /' "${scratch}/leftovers.log" >&2
+    printf 'each one needs an entry in the API notes (run scripts/sync-apinotes.sh)\n' >&2
+    exit 1
+    ;;
+  2)
+    printf 'could not read the Swift interface of module Rime:\n' >&2
+    sed 's/^/  /' "${scratch}/leftovers.log" >&2
+    exit 1
+    ;;
+  3)
+    printf 'the Swift interface scan could not run:\n' >&2
+    sed 's/^/  /' "${scratch}/scan-error.log" >&2
+    exit 1
+    ;;
+  *)
+    printf 'the Swift interface scan did not run (exit %s):\n' "${scan_status}" >&2
+    sed 's/^/  /' "${scratch}/scan-error.log" >&2
+    printf 'is python3 on PATH?\n' >&2
+    exit 1
+    ;;
+esac
+
+printf 'swift name probe passed: un-suffixed names resolve, no suffixed name is visible\n'
 
 # The logsink enums must import as Swift enums rather than as integers, which is
 # what makes the constants passable to the API and exhaustive switches possible.
@@ -189,13 +300,18 @@ printf 'layout probe passed: 4-byte enums, 64-byte record\n'
 
 # RimeSystem declares the same module for a system-provided librime, so it needs
 # the same notes. Compare rather than duplicating the probe: the two files must
-# not drift.
+# not drift. A missing copy fails here too - AGENTS.md requires the file in both
+# places, and the release commit stages Sources/RimeSystem, so deleting it would
+# otherwise ship unnoticed.
 system_notes="${repo_root}/Sources/RimeSystem/Rime.apinotes"
-if [[ -f "${system_notes}" ]]; then
-  if ! diff -q "${include_dir}/Rime.apinotes" "${system_notes}" >/dev/null; then
-    printf 'Rime.apinotes has drifted between RimeHeaders and RimeSystem:\n' >&2
-    diff "${include_dir}/Rime.apinotes" "${system_notes}" >&2 || true
-    exit 1
-  fi
-  printf 'RimeSystem API notes are in sync\n'
+if [[ ! -f "${system_notes}" ]]; then
+  printf 'missing API notes: %s\n' "${system_notes}" >&2
+  printf 'run scripts/sync-apinotes.sh to write both copies\n' >&2
+  exit 1
 fi
+if ! diff -q "${include_dir}/Rime.apinotes" "${system_notes}" >/dev/null; then
+  printf 'Rime.apinotes has drifted between RimeHeaders and RimeSystem:\n' >&2
+  diff "${include_dir}/Rime.apinotes" "${system_notes}" >&2 || true
+  exit 1
+fi
+printf 'RimeSystem API notes are in sync\n'
