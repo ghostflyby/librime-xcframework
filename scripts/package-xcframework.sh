@@ -255,8 +255,8 @@ README
 # run produced. Sources/RimeHeaders/include is what downstream checks out to
 # build against, so it is refreshed as part of packaging - the same place the
 # artifacts are assembled - rather than as a separate operation someone has to
-# remember. The linker stub is not committed: it ships as a binary target, so it
-# is produced and zipped with the other artifacts instead.
+# remember. The linker stub's skeletons are not committed either: they are
+# produced from the dylibs and zipped with the other artifacts.
 sync_repository_sources() {
   local headers_dir="${repo_root}/Sources/RimeHeaders/include"
   local smoke_dir
