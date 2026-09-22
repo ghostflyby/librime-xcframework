@@ -151,6 +151,7 @@ ${plugin_entries}
   "artifacts": [
     "librime-static.xcframework.zip",
     "librime-dynamic.xcframework.zip",
+    "librime-stub.xcframework.zip",
     "LICENSE.txt",
     "THIRD_PARTY_NOTICES.md",
     "third-party-notices.zip",

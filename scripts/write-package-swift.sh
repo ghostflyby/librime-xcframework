@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 4 || $# -gt 5 ]]; then
-  printf 'usage: %s <static-artifact-url> <static-checksum> <dynamic-artifact-url> <dynamic-checksum> [output]\n' "$0" >&2
+if [[ $# -lt 6 || $# -gt 7 ]]; then
+  printf 'usage: %s <static-url> <static-checksum> <dynamic-url> <dynamic-checksum> <stub-url> <stub-checksum> [output]\n' "$0" >&2
   exit 2
 fi
 
@@ -10,7 +10,9 @@ static_artifact_url="$1"
 static_checksum="$2"
 dynamic_artifact_url="$3"
 dynamic_checksum="$4"
-output_path="${5:-Package.swift}"
+stub_artifact_url="$5"
+stub_checksum="$6"
+output_path="${7:-Package.swift}"
 
 cat > "${output_path}" <<SWIFT
 // swift-tools-version: 5.9
@@ -34,13 +36,6 @@ let package = Package(
             name: "RimeHeaders",
             path: "Sources/RimeHeaders/include"
         ),
-        .target(
-            name: "RimeDynamicStub",
-            path: "Sources/RimeDynamicStub",
-            linkerSettings: [
-                .linkedFramework("RimeDynamic")
-            ]
-        ),
         .binaryTarget(
             name: "RimeStatic",
             url: "${static_artifact_url}",
@@ -50,6 +45,11 @@ let package = Package(
             name: "RimeDynamic",
             url: "${dynamic_artifact_url}",
             checksum: "${dynamic_checksum}"
+        ),
+        .binaryTarget(
+            name: "RimeDynamicStub",
+            url: "${stub_artifact_url}",
+            checksum: "${stub_checksum}"
         ),
         .systemLibrary(
             name: "RimeSystem",
