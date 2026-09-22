@@ -21,18 +21,18 @@ let package = Package(
         ),
         .binaryTarget(
             name: "RimeStatic",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-static.xcframework.zip",
-            checksum: "615b9bd7abc09c00516f3d3139142a30a9a9c74cf7e51cfa1d4d1449afb3cf24"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.9.0.0/librime-static.xcframework.zip",
+            checksum: "464464e02484bdd1121fe213539a32f1b5cc51e79bbef011c61663242b7d45b1"
         ),
         .binaryTarget(
             name: "RimeDynamic",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-dynamic.xcframework.zip",
-            checksum: "3aa052040764b5b59caaabe690d59e81f55ab77725a4b88e1f696f943118ec28"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.9.0.0/librime-dynamic.xcframework.zip",
+            checksum: "c9169a0f9caaa68567a85884cde37fd7da53defad2e12a1e2d185e1651328905"
         ),
         .binaryTarget(
             name: "RimeDynamicStub",
-            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-stub.xcframework.zip",
-            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.9.0.0/librime-stub.xcframework.zip",
+            checksum: "c6a421865fc1b1214256d5a5c9be80147e8ec247660bcde61b19844d03aa7b24"
         ),
         .systemLibrary(
             name: "RimeSystem",
