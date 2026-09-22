@@ -12,7 +12,7 @@ on:
         required: false
         default: ""
       packaging_version:
-        description: Release tag for this packaged artifact, for example 1.17.0-pack.9.1.0. Leave empty to infer it from existing tags, which only ever bumps the patch, so set this explicitly to make a minor or epoch release.
+        description: Release tag for this packaged artifact, for example 1.17.0-pack.9.1.0. Leave empty to infer it from existing tags, which only ever bumps the patch, so set this explicitly to make a minor or generation release.
         required: false
         default: ""
       publish:

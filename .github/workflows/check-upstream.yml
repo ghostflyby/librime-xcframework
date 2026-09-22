@@ -38,7 +38,7 @@ jobs:
           if [[ "${FORCE}" != "true" ]]; then
             # Any pack release for this upstream version means the scheduled
             # check has nothing to do. Both suffix forms count: the old bare
-            # counter and the epoch.minor.patch scheme that replaced it.
+            # counter and the generation.minor.patch scheme that replaced it.
             existing_release="$(
               gh api --paginate "repos/${GH_REPO}/releases" --jq '.[].tag_name' |
                 while read -r tag; do
