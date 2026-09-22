@@ -21,6 +21,7 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - Require `VCPKG_ROOT` from the environment; do not add a fallback that looks for a vcpkg checkout inside this repository, and do not clone vcpkg into it. A silent fallback hides a missing environment dependency and invites a repo-local checkout that then has to be maintained.
 - Use vcpkg's `files` binary cache source with `actions/cache`; do not rely on the removed `x-gha` backend.
 - Keep the vcpkg `builtin-baseline` only in `vcpkg.json`. Do not duplicate it in workflow environment variables.
+- Keep the `overrides` entry that pins `lua` to 5.4.8. `librime-lua` targets Lua 5.4 — it vendors `lua5.4` and defines `LUA_COMPAT_5_3` only for that path — while the baseline resolves `lua` to 5.5.0, and Lua 5.5 makes the loop variable const, so a 5.5 interpreter refuses ordinary Rime Lua configs. The failure shows up at runtime as a broken Lua plugin, not at build time, so the pin must not be dropped or bumped without verifying the plugin against the new version.
 - Let Dependabot update the vcpkg baseline and GitHub Actions versions.
 - Do not require consumers to link librime's internal third-party dependencies manually.
 

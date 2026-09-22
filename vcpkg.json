@@ -2,6 +2,12 @@
   "name": "librime-xcframework",
   "version-string": "0.1.0",
   "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
+  "overrides": [
+    {
+      "name": "lua",
+      "version": "5.4.8"
+    }
+  ],
   "dependencies": [
     "gflags",
     "glog",
