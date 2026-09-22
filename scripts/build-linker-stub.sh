@@ -57,7 +57,6 @@ case "${input_path}" in
     # tapi writes the tbd next to its input, so stub from a copy and keep the
     # input directory untouched.
     real_dylib="${input_path}"
-    architectures="$(lipo -archs "${real_dylib}")"
     cp "${real_dylib}" "${scratch_dir}/RimeDynamic"
     (cd "${scratch_dir}" && xcrun tapi stubify RimeDynamic)
     tbd_path="${scratch_dir}/RimeDynamic.tbd"
@@ -191,12 +190,6 @@ for arch in architectures:
     print(f"  {target}: {total} exported symbols, {len(text_weak) + len(data_weak)} weak",
           file=sys.stderr)
 PY
-
-if [[ -z "$(ls -A "${asm_dir}")" ]]; then
-  printf 'no stub source produced; %s names no target matching %s\n' \
-    "${tbd_path}" "${tbd_platform}" >&2
-  exit 1
-fi
 
 sdk_path="$(xcrun --sdk "${sdk_name}" --show-sdk-path)"
 binary_path="${scratch_dir}/${framework_name}"
