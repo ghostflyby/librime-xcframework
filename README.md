@@ -62,24 +62,30 @@ Notes on the mechanism, because two failure modes are silent:
 
 ### Linking without embedding (XPC services and app extensions)
 
-Xcode embeds the `RimeDynamic` product into every target that declares it and offers no "link only" switch. Extension-like targets should declare `RimeDynamicStub` instead of `RimeDynamic`; the target is then linked against the framework by name while nothing is embedded. Wire the loader to the app's embedded copy:
+Xcode embeds the `RimeDynamic` product into every target that declares it — directly or through a wrapper library — and offers no "link only" switch, so extension-like targets link through `RimeDynamicStub` instead: the target is linked against the framework by name while nothing is embedded. An extension-like target then needs three things, the last of which only applies when it is built outside its host app:
 
-1. Declare `RimeDynamicStub` on the XPC/extension target (alongside `Rime` or a wrapper library that already provides it).
-2. Put the skeleton framework directory on the framework search path for the matching SDK. The skeletons are generated and committed by the release pipeline per platform under `Sources/RimeDynamicStub` in the package checkout; for a macOS XPC:
-
-   ```text
-   FRAMEWORK_SEARCH_PATHS[sdk=macosx*] = $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/macos
-   ```
-
-   Condition the path per SDK (`macosx*`/`iphoneos*`/`iphonesimulator*` selecting the `macos`/`ios`/`ios-simulator` skeleton) and do not use one recursive path over all platforms: the skeletons share the framework name, and the linker should only be offered the skeleton whose target triples match the platform being linked.
-
-3. Point the runpath at the app's embedded copy. For a macOS XPC service four levels up reaches the app's `Frameworks` directory:
+1. Make sure the target links through the stub. A wrapper library that already links through it — RimeKit does this through its `librimeDynamic` trait — needs nothing declared on the target; declaring `RimeDynamicStub` explicitly is only for targets that otherwise reach librime on their own.
+2. Point the runpath at the app's embedded copy. For a macOS XPC service four levels up reaches the app's `Frameworks` directory:
 
    ```text
    LD_RUNPATH_SEARCH_PATHS = @executable_path/../../../../Frameworks
    ```
 
-The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
+3. Add the skeleton directory to the framework search path **only when building that target on its own** (a scheme that compiles the extension without its host app):
+
+   ```text
+   FRAMEWORK_SEARCH_PATHS[sdk=macosx*]          = $(inherited) $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/macos
+   FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]        = $(inherited) $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/ios
+   FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*] = $(inherited) $(BUILD_DIR)/../../SourcePackages/checkouts/librime-xcframework/Sources/RimeDynamicStub/ios-simulator
+   ```
+
+   Condition the path per SDK rather than using one recursive path over all platforms: the skeletons share the framework name, and the linker should only be offered the skeleton whose target triples match the platform being linked.
+
+   A full build does not need this. When the app target declares `RimeDynamic`, Xcode stages the real framework into `BUILT_PRODUCTS_DIR`, which is already on the framework search path and comes before the skeleton directory, so the extension resolves `-framework RimeDynamic` against the staged copy and the skeleton never comes into play. Building the extension alone stages nothing, so the search path is the only thing that can resolve the framework — and that failure is a link failure, not a runtime one; an extension cannot be launched without its host app either way.
+
+The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly wherever the skeleton is the thing being linked against — at link time if the skeleton is older than the framework, at launch if it is newer. In a full build the skeleton is not consulted at all (see step 3), so a mismatch there is inert.
+
+The stub travels as a source target rather than a `binaryTarget` because a binary target cannot express "link but do not embed": Xcode embeds every dynamic framework a bundle target declares, and that embed step needs a binary it can copy and sign, which a framework holding only a text-based stub cannot supply. A source target produces no artifact to embed, which is what makes a text-based stub sufficient here; the cost is that a standalone build needs the search path in step 3 — a link-time input the package cannot supply by itself.
 
 ### Swapping the implementation (replaceable librime)
 
