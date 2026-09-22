@@ -19,13 +19,6 @@ let package = Package(
             name: "RimeHeaders",
             path: "Sources/RimeHeaders/include"
         ),
-        .target(
-            name: "RimeDynamicStub",
-            path: "Sources/RimeDynamicStub",
-            linkerSettings: [
-                .linkedFramework("RimeDynamic")
-            ]
-        ),
         .binaryTarget(
             name: "RimeStatic",
             url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-static.xcframework.zip",
@@ -35,6 +28,11 @@ let package = Package(
             name: "RimeDynamic",
             url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-dynamic.xcframework.zip",
             checksum: "3aa052040764b5b59caaabe690d59e81f55ab77725a4b88e1f696f943118ec28"
+        ),
+        .binaryTarget(
+            name: "RimeDynamicStub",
+            url: "https://github.com/ghostflyby/librime-xcframework/releases/download/1.17.0-pack.8/librime-stub.xcframework.zip",
+            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         ),
         .systemLibrary(
             name: "RimeSystem",
