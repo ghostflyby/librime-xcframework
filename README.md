@@ -62,9 +62,9 @@ Notes on the mechanism, because two failure modes are silent:
 
 ### Linking without embedding (XPC services and app extensions)
 
-Xcode embeds the `RimeDynamic` product into every target that declares it — directly or through a wrapper library — and offers no "link only" switch, so extension-like targets link through `RimeDynamicStub` instead: the target is linked against the framework by name while nothing is embedded. Wire the loader to the app's embedded copy:
+Xcode embeds the `RimeDynamic` product into every target that declares it — directly or through a wrapper library — and offers no "link only" switch, so extension-like targets link through `RimeDynamicStub` instead: the target is linked against the framework by name while nothing is embedded. An extension-like target then needs three things, the last of which only applies when it is built outside its host app:
 
-1. Make sure the target links through the stub. A wrapper library that already carries the product needs nothing declared on the target — RimeKit does this through its `librimeDynamic` trait — and declaring `RimeDynamicStub` explicitly is only for targets that otherwise reach librime on their own.
+1. Make sure the target links through the stub. A wrapper library that already links through it — RimeKit does this through its `librimeDynamic` trait — needs nothing declared on the target; declaring `RimeDynamicStub` explicitly is only for targets that otherwise reach librime on their own.
 2. Point the runpath at the app's embedded copy. For a macOS XPC service four levels up reaches the app's `Frameworks` directory:
 
    ```text
@@ -83,9 +83,9 @@ Xcode embeds the `RimeDynamic` product into every target that declares it — di
 
    A full build does not need this. When the app target declares `RimeDynamic`, Xcode stages the real framework into `BUILT_PRODUCTS_DIR`, which is already on the framework search path and comes before the skeleton directory, so the extension resolves `-framework RimeDynamic` against the staged copy and the skeleton never comes into play. Building the extension alone stages nothing, so the search path is the only thing that can resolve the framework — and that failure is a link failure, not a runtime one; an extension cannot be launched without its host app either way.
 
-The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly — at link time if the skeleton is older than the framework, at launch if it is newer.
+The skeletons are generated with `tapi stubify` from the released dylibs by the release pipeline and committed with the release manifest — the repository carries no hand-made stubs — so a skeleton always matches the artifacts of its tag. A mismatched skeleton fails loudly wherever the skeleton is the thing being linked against — at link time if the skeleton is older than the framework, at launch if it is newer. In a full build the skeleton is not consulted at all (see step 3), so a mismatch there is inert.
 
-The stub travels as a source target rather than a `binaryTarget` because a binary target cannot express "link but do not embed": Xcode stages and embeds every binary target a bundle declares, and embedding reads the framework's binary. A source target produces no artifact to embed, which is what makes a text-based stub sufficient here — and is why the search path above is the one thing the package cannot supply by itself.
+The stub travels as a source target rather than a `binaryTarget` because a binary target cannot express "link but do not embed": Xcode embeds every dynamic framework a bundle target declares, and that embed step needs a binary it can copy and sign, which a framework holding only a text-based stub cannot supply. A source target produces no artifact to embed, which is what makes a text-based stub sufficient here; the cost is that a standalone build needs the search path in step 3 — a link-time input the package cannot supply by itself.
 
 ### Swapping the implementation (replaceable librime)
 
