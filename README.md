@@ -10,7 +10,7 @@ A release contains:
 
 - `librime-static.xcframework.zip`
 - `librime-dynamic.xcframework.zip`
-- `librime-stub.xcframework.zip`
+- `librime-stub.zip`
 - `LICENSE.txt`
 - `THIRD_PARTY_NOTICES.md`
 - `third-party-notices.zip`
@@ -36,7 +36,7 @@ All consumer source code writes `import Rime`. The module exposes librime's C AP
 
 - `Rime` — public librime headers plus the `Rime` module only, shipped as a source-free systemLibrary: no binaries are downloaded, nothing is linked, and nothing is compiled on the consumer side. Wrapper libraries should depend on this product.
 - `RimeDynamic` — the dynamic framework XCFramework. Xcode links and embeds it automatically for targets that declare the product.
-- `RimeDynamicStub` — a link-only handle for the dynamic framework, shipped as a binary target whose framework exports the real dylib's symbols under the real dylib's install name. A target that links through it records a load command for `@rpath/RimeDynamic.framework/...` and resolves it at runtime against the app's embedded copy, so XPC services and app extensions do not need their own librime (see below).
+- `RimeDynamicStub` — a link-only handle for the dynamic framework. Declaring it emits `-framework RimeDynamic` and nothing else: no artifact is produced, so nothing is embedded, and the load command it records resolves at runtime against the app's embedded copy. XPC services and app extensions use it to share that copy (see below).
 - `RimeStatic` — the static XCFramework with librime dependencies merged into the archive. Linked automatically.
 - `RimeSystem` — binds against a system-provided or user-replaced librime implementation via `pkg-config rime` flags without distributing any librime headers. It also declares the `Rime` module, so do not combine `RimeSystem` and `Rime` in the same package graph.
 
@@ -44,7 +44,7 @@ Wrapper libraries depend on `Rime` only. Terminal apps that use the binary artif
 
 ### Linking without embedding a second librime (XPC services and app extensions)
 
-Xcode embeds the `RimeDynamic` product into every target that declares it and offers no "link only" switch, so extension-like targets link through `RimeDynamicStub` instead. That product is a binary target holding an SDK-style framework whose binary exports the real dylib's symbols while carrying the real dylib's install name, so:
+Xcode embeds the `RimeDynamic` product into every target that declares it — directly or through a wrapper library — and offers no "link only" switch, so extension-like targets link through `RimeDynamicStub` instead. That product contributes the `-framework RimeDynamic` flag and no library artifact, so:
 
 1. Link the extension through the stub. A wrapper library that already links through it — RimeKit does this through its `librimeDynamic` trait — needs nothing declared on the target; declaring `RimeDynamicStub` explicitly is only for targets that otherwise reach librime on their own.
 2. Point the runpath at the app's embedded copy. For a macOS XPC service four levels up reaches the app's `Frameworks` directory:
@@ -55,16 +55,26 @@ Xcode embeds the `RimeDynamic` product into every target that declares it and of
 
 3. Declare `RimeDynamic` on the app target so the real framework is embedded once, in the app.
 
-No framework search path is involved: the stub arrives through the package's binary target, and Xcode stages both it and the real framework into the build's framework search path itself. That also means an extension can be built on its own — a scheme that compiles it without its host app — because the stub resolves `-framework RimeDynamic` regardless of what else is being built.
+A full build needs nothing else: the staged real framework is on the framework search path already, so `-framework RimeDynamic` resolves against it and no skeleton is consulted. Building the extension **on its own** — a scheme that compiles it without its host app — is the one case that needs the skeleton, because nothing has staged a framework to resolve the flag against. Unpack `librime-stub.zip` from the release and put its per-platform directory on the search path:
 
-The stub is a real dylib rather than a text-based `.tbd` because Xcode stages, embeds and signs binary targets into bundle products, and each of those steps reads the framework's binary; a framework holding only a `.tbd` fails the build before the linker runs. The cost is that Xcode embeds a copy of the stub into every target that links it. That copy is inert — the load command names `RimeDynamic.framework`, so dyld never opens the stub — and it carries no librime code, which keeps the "one librime per app" property intact.
+```text
+FRAMEWORK_SEARCH_PATHS[sdk=macosx*]          = $(inherited) <unpacked>/macos
+FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]        = $(inherited) <unpacked>/ios
+FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*] = $(inherited) <unpacked>/ios-simulator
+```
+
+Condition the path per SDK rather than using one recursive path over all platforms: the skeletons share the framework name, and the linker should only be offered the skeleton whose target triples match the platform being linked.
+
+The skeletons are text-based stubs generated with `tapi stubify` from the released dylibs, carrying the real install name (`@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` on macOS, `@rpath/RimeDynamic.framework/RimeDynamic` on iOS) and the same exported symbol list. They ship as a release zip rather than as committed source, and they are deliberately **not** a binary target: Xcode stages, embeds and signs every binary target a bundle target links, and each of those steps reads the framework's binary, which a text-based stub cannot provide. A source target that only emits a flag produces no framework for Xcode to embed — which is what keeps the "one librime per app" property intact, at the cost of the search path above for standalone extension builds.
+
+Because a skeleton mirrors the dylibs of its own release, a mismatch fails loudly wherever the skeleton is the thing being linked against — at link time if the skeleton is older than the framework, at launch if it is newer. In a full build the skeleton is not consulted at all, so a mismatch there is inert.
 
 ### Swapping the implementation (replaceable librime)
 
 `RimeDynamicStub` fixes a contract, not an implementation. Linking through it emits `-framework RimeDynamic` — a load command naming the real framework (`@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` on macOS, `@rpath/RimeDynamic.framework/RimeDynamic` on iOS) plus a symbol requirement equal to the stub's exported list — and nothing else: whatever framework dyld resolves under that install name at runtime is the implementation. A wrapper library that links through the stub (directly, or through a package trait such as RimeKit's `librimeDynamic`) therefore leaves the choice of the librime binary to the final app:
 
 1. **Released binary (default)** — declare `RimeDynamic` on the app target to embed the packaged framework.
-2. **Custom or patched librime** — repackage the replacement under the same identity: bundle name `RimeDynamic.framework`, versioned layout `Versions/A/RimeDynamic`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` (set with `install_name_tool -id`; the replacement's own dependencies must remain resolvable). Embed and sign it in place of the packaged copy — the wrapper library needs no rebuild. The replacement's exported symbols must cover the stub's list of the tag the library was built against; a framework older than the stub fails at link time, a newer one fails at launch.
+2. **Custom or patched librime** — repackage the replacement under the same identity: bundle name `RimeDynamic.framework`, versioned layout `Versions/A/RimeDynamic`, install name `@rpath/RimeDynamic.framework/Versions/A/RimeDynamic` (set with `install_name_tool -id`; the replacement's own dependencies must remain resolvable). Embed and sign it in place of the packaged copy — the wrapper library needs no rebuild. The replacement's exported symbols must cover the stub's list of the tag the library was built against. Which step notices a shortfall depends on which framework the linker consulted: in a full build it sees the replacement itself, so fewer symbols fail the link; in a standalone extension build it sees the stub, so the link succeeds and dyld then fails at launch, asking the embedded framework for symbols it does not export.
 3. **System librime (e.g. Homebrew)** — a bare `librime.dylib` is not a drop-in for the stub: its install name differs. Either wrap it into the framework identity above, or use the `RimeSystem` product at the package-graph level (pkg-config), which replaces `Rime` and cannot coexist with it.
 
 User data directories (`RimeTraits`) are independent of the binary: swapping the implementation does not touch deployed schemas or user configuration.
@@ -73,7 +83,7 @@ User data directories (`RimeTraits`) are independent of the binary: swapping the
 
 Releases up to 1.17.0-pack.6 shipped the `Rime` headers product as a compiled Clang target. When a scheme with code coverage enabled built a test graph sharing that product between an app host and a test bundle, Xcode built the product as a dynamic framework whose link failed with `Undefined symbols: ___llvm_profile_runtime`: coverage instrumentation references the profile runtime from every translation unit (even empty or data-only ones), and the dynamic product framework link omits it.
 
-The headers product now compiles nothing on the consumer side, so coverage builds are unaffected from the release that carries this change on. Releases that still carried `RimeDynamicStub` as a compiled target worked around it with a placeholder translation unit. 1.17.0-pack.8 — the only release where that unit was Swift — had it link the profile runtime through the Swift driver, because a C translation unit inside such a product variant fails the same way. Since the stub became a binary target it compiles nothing either. For older releases, scope the scheme's coverage targets to your own targets or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
+The headers product now compiles nothing on the consumer side, so coverage builds are unaffected from the release that carries this change on. Releases that still carried `RimeDynamicStub` as a compiled target ship a placeholder translation unit, and since 1.17.0-pack.8 that unit is Swift: its product variant links the profile runtime through the Swift driver, while a C translation unit inside such a variant fails the same way. For older releases, scope the scheme's coverage targets to your own targets or disable coverage for the affected scheme; normal app and extension builds without coverage are unaffected.
 
 The modules previously shipped as `RimeStatic`, `RimeDynamic`, and `RimeSystem`; import sites must change to `import Rime` starting with the first release built from this layout.
 
@@ -109,9 +119,9 @@ scripts/package-xcframework.sh
 
 Packaging also refreshes the sources this repository commits — the public
 headers under `Sources/RimeHeaders/include` — so they always match the
-artifacts that were just produced. The linker stub is not committed: it ships as
-a binary target, so `scripts/build-linker-stub.sh` builds it from the released
-dylibs and it is zipped with the other artifacts.
+artifacts that were just produced. The linker stub's skeletons are not committed
+either: the release pipeline generates them from the dylibs with `tapi stubify`
+and ships them as `librime-stub.zip` alongside the other artifacts.
 `VCPKG_ROOT` is required (there is no in-repo vcpkg fallback) and `cmake` and
 `ninja` must be on `PATH`.
 

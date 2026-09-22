@@ -175,11 +175,9 @@ jobs:
           release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${PACKAGING_VERSION}"
           static_checksum="$(swift package compute-checksum dist/librime-static.xcframework.zip)"
           dynamic_checksum="$(swift package compute-checksum dist/librime-dynamic.xcframework.zip)"
-          stub_checksum="$(swift package compute-checksum dist/librime-stub.xcframework.zip)"
           scripts/write-package-swift.sh \
             "${release_base_url}/librime-static.xcframework.zip" "${static_checksum}" \
             "${release_base_url}/librime-dynamic.xcframework.zip" "${dynamic_checksum}" \
-            "${release_base_url}/librime-stub.xcframework.zip" "${stub_checksum}" \
             Package.swift
 
       - name: Write build metadata
@@ -227,7 +225,7 @@ jobs:
           assets=(
             dist/librime-static.xcframework.zip
             dist/librime-dynamic.xcframework.zip
-            dist/librime-stub.xcframework.zip
+            dist/librime-stub.zip
             dist/LICENSE.txt
             dist/THIRD_PARTY_NOTICES.md
             dist/third-party-notices.zip
@@ -253,7 +251,7 @@ jobs:
           path: |
             dist/librime-static.xcframework.zip
             dist/librime-dynamic.xcframework.zip
-            dist/librime-stub.xcframework.zip
+            dist/librime-stub.zip
             dist/LICENSE.txt
             dist/THIRD_PARTY_NOTICES.md
             dist/third-party-notices.zip

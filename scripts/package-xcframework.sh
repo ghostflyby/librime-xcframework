@@ -9,8 +9,8 @@ static_xcframework_path="${dist_dir}/librime-static.xcframework"
 static_zip_path="${dist_dir}/librime-static.xcframework.zip"
 dynamic_xcframework_path="${dist_dir}/librime-dynamic.xcframework"
 dynamic_zip_path="${dist_dir}/librime-dynamic.xcframework.zip"
-stub_xcframework_path="${dist_dir}/librime-stub.xcframework"
-stub_zip_path="${dist_dir}/librime-stub.xcframework.zip"
+stub_zip_path="${dist_dir}/librime-stub.zip"
+stub_skeleton_dir="${dist_dir}/librime-stub"
 license_output_path="${dist_dir}/LICENSE.txt"
 third_party_notice_output_path="${dist_dir}/THIRD_PARTY_NOTICES.md"
 third_party_notice_bundle_path="${dist_dir}/third-party-notices"
@@ -73,11 +73,12 @@ done
 rm -rf \
   "${static_xcframework_path}" "${static_zip_path}" \
   "${dynamic_xcframework_path}" "${dynamic_zip_path}" \
-  "${stub_xcframework_path}" "${stub_zip_path}" \
+  "${stub_zip_path}" \
   "${license_output_path}" "${third_party_notice_output_path}" \
   "${third_party_notice_bundle_path}" "${third_party_notice_zip_path}" \
   "${legacy_static_xcframework_path}" "${legacy_static_zip_path}" \
-  "${legacy_checksum_path}" "${universal_dir}" "${ios_simulator_universal_dir}" "${dynamic_frameworks_dir}"
+  "${legacy_checksum_path}" "${universal_dir}" "${ios_simulator_universal_dir}" "${dynamic_frameworks_dir}" \
+  "${stub_skeleton_dir}"
 mkdir -p "${dist_dir}"
 mkdir -p "${universal_dir}/static/lib" "${universal_dir}/dynamic/lib" "${ios_simulator_universal_dir}/static/lib" "${ios_simulator_universal_dir}/dynamic/lib"
 
@@ -156,39 +157,48 @@ create_macos_dynamic_framework() {
 
 # The linker stub lets extension-like targets link the dynamic framework without
 # embedding it, so every one of them is served by the app's single embedded copy.
-# It is a Mach-O dylib that exports the real dylib's symbols under the real
-# dylib's install name, which is what makes a client record a load command for
-# @rpath/RimeDynamic.framework/... and resolve it at runtime against whatever the
-# app embedded.
+# Each platform gets a skeleton framework in the SDK style: the tbd sits at the
+# binary's position inside RimeDynamic.framework (deep Versions/A layout for
+# macOS, flat for iOS), carrying the real dylib's install name so a client that
+# links against it records a load command for the real framework.
 #
-# It ships as a binary target rather than as committed source so the package
-# needs no per-consumer framework search path, and that is also why the stub is
-# a real binary: a framework holding only a text-based stub cannot be staged or
-# embedded, because Xcode reads the framework's binary when it copies one into a
-# bundle. build-linker-stub.sh derives every mirrored property from the released
-# dylibs. The three slices are assembled into an XCFramework, which the release
-# workflow zips and uploads alongside the other two.
+# The skeletons ship as a release zip rather than as committed source: they are
+# a build product of the released dylibs, and a zip keeps them out of the
+# repository. They are consumed by putting the extracted directory on the
+# framework search path — deliberately not as a binary target, because Xcode
+# stages, embeds and signs every binary target a bundle target links, and each
+# of those steps reads the framework's binary, which a text-based stub cannot
+# provide. A source target that only emits -framework RimeDynamic produces no
+# artifact to embed, and in a full build the real framework resolves that flag
+# without consulting the skeleton at all.
+#
+# tapi writes the tbd next to its input, so each binary is copied to scratch
+# first to keep the framework directories clean.
 generate_linker_stubs() {
-  local stubs_dir="${out_dir}/linker-stubs"
-  local platform source_binary
+  local stubs_dir="${stub_skeleton_dir}"
+  local platform binary tbd
 
   rm -rf "${stubs_dir}"
   for platform in macos ios ios-simulator; do
     case "${platform}" in
-      macos) source_binary="${macos_dynamic_framework}/Versions/A/RimeDynamic" ;;
-      ios) source_binary="${ios_device_dynamic_framework}/RimeDynamic" ;;
-      ios-simulator) source_binary="${ios_simulator_dynamic_framework}/RimeDynamic" ;;
+      macos) binary="${macos_dynamic_framework}/Versions/A/RimeDynamic" ;;
+      ios) binary="${ios_device_dynamic_framework}/RimeDynamic" ;;
+      ios-simulator) binary="${ios_simulator_dynamic_framework}/RimeDynamic" ;;
     esac
-    "${script_dir}/build-linker-stub.sh" \
-      "${platform}" "${source_binary}" "${stubs_dir}/${platform}/RimeDynamicStub.framework"
+    mkdir -p "${stubs_dir}/.scratch/${platform}" "${stubs_dir}/${platform}/RimeDynamic.framework"
+    cp "${binary}" "${stubs_dir}/.scratch/${platform}/RimeDynamic"
+    (cd "${stubs_dir}/.scratch/${platform}" && xcrun tapi stubify RimeDynamic)
+    tbd="${stubs_dir}/.scratch/${platform}/RimeDynamic.tbd"
+    if [[ "${platform}" == "macos" ]]; then
+      mkdir -p "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/A"
+      mv "${tbd}" "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/A/RimeDynamic.tbd"
+      ln -sfn "A" "${stubs_dir}/${platform}/RimeDynamic.framework/Versions/Current"
+      ln -sfn "Versions/Current/RimeDynamic.tbd" "${stubs_dir}/${platform}/RimeDynamic.framework/RimeDynamic"
+    else
+      mv "${tbd}" "${stubs_dir}/${platform}/RimeDynamic.framework/RimeDynamic.tbd"
+    fi
   done
-
-  rm -rf "${stub_xcframework_path}"
-  xcodebuild -create-xcframework \
-    -framework "${stubs_dir}/macos/RimeDynamicStub.framework" \
-    -framework "${stubs_dir}/ios/RimeDynamicStub.framework" \
-    -framework "${stubs_dir}/ios-simulator/RimeDynamicStub.framework" \
-    -output "${stub_xcframework_path}"
+  rm -rf "${stubs_dir}/.scratch"
 }
 
 copy_distribution_notices() {
@@ -245,8 +255,8 @@ README
 # run produced. Sources/RimeHeaders/include is what downstream checks out to
 # build against, so it is refreshed as part of packaging - the same place the
 # artifacts are assembled - rather than as a separate operation someone has to
-# remember. The linker stub is not committed: it ships as a binary target, so it
-# is produced and zipped with the other artifacts instead.
+# remember. The linker stub's skeletons are not committed either: they are
+# produced from the dylibs and zipped with the other artifacts.
 sync_repository_sources() {
   local headers_dir="${repo_root}/Sources/RimeHeaders/include"
   local smoke_dir
@@ -335,7 +345,7 @@ copy_distribution_notices
   cd "${dist_dir}"
   ditto -c -k --sequesterRsrc --keepParent "librime-static.xcframework" "librime-static.xcframework.zip"
   ditto -c -k --sequesterRsrc --keepParent "librime-dynamic.xcframework" "librime-dynamic.xcframework.zip"
-  ditto -c -k --sequesterRsrc --keepParent "librime-stub.xcframework" "librime-stub.xcframework.zip"
+  ditto -c -k --sequesterRsrc --keepParent "librime-stub" "librime-stub.zip"
   ditto -c -k --sequesterRsrc --keepParent "third-party-notices" "third-party-notices.zip"
 )
 
