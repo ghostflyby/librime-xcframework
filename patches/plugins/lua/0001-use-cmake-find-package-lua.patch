@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 42f2ebb..d4cdbc0 100644
+index 42f2ebb..aaf124b 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -1,19 +1,17 @@
+@@ -1,20 +1,20 @@
  set(LUA_VERSION "lua" CACHE STRING "lua version")
  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/lua5.4/lua.h")
 -  find_package(PkgConfig)
@@ -16,19 +16,22 @@ index 42f2ebb..d4cdbc0 100644
 -  endif()
 -  if(LUA_FOUND)
 +  find_package(Lua REQUIRED)
-+  # Prefer a library target when the Lua package provides one. Passing a target
-+  # puts its absolute path on the link line and carries its include directories;
-+  # a bare library name relies on the linker's default search path, which does
-+  # not contain the dependency's lib directory here.
 +  if(TARGET lua)
++    # vcpkg's Lua package exports this target, carrying the library's absolute path.
 +    set(LUA_TARGET lua)
 +  elseif(TARGET PkgConfig::LUA)
      set(LUA_TARGET PkgConfig::LUA)
 -    include_directories(${LUA_INCLUDE_DIRS})
++  elseif(LUA_LIBRARY AND EXISTS "${LUA_LIBRARY}")
++    # Otherwise LUA_LIBRARIES can hold a bare name like "lua", which leaves the
++    # linker searching its default paths - and the dependency's lib directory is
++    # not among them. Use the file find_package already located.
++    set(LUA_TARGET "${LUA_LIBRARY}")
    else()
 -    message(FATAL_ERROR "Lua not found, consider using `bash action-install.sh` to download.")
 +    set(LUA_TARGET ${LUA_LIBRARIES})
-+    include_directories(${LUA_INCLUDE_DIR})
    endif()
++  include_directories(${LUA_INCLUDE_DIR})
  else()
    message(STATUS "Using in-tree lua source")
+   include_directories(thirdparty/lua5.4)
