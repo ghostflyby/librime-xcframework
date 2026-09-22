@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 42f2ebb..aaf124b 100644
+index 42f2ebb..67478b8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -1,20 +1,20 @@
+@@ -1,20 +1,23 @@
  set(LUA_VERSION "lua" CACHE STRING "lua version")
  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/lua5.4/lua.h")
 -  find_package(PkgConfig)
@@ -17,15 +17,18 @@ index 42f2ebb..aaf124b 100644
 -  if(LUA_FOUND)
 +  find_package(Lua REQUIRED)
 +  if(TARGET lua)
-+    # vcpkg's Lua package exports this target, carrying the library's absolute path.
++    # vcpkg exports this as a directory-scoped imported target. This file's link
++    # line is assembled one level up (src/ links librime), and a directory-scoped
++    # name does not resolve there: it degrades to a bare `-llua`, which sends the
++    # linker looking for the library in its default paths instead of the
++    # dependency's lib directory. Promote it so the name keeps its real path.
++    set_target_properties(lua PROPERTIES IMPORTED_GLOBAL TRUE)
 +    set(LUA_TARGET lua)
 +  elseif(TARGET PkgConfig::LUA)
      set(LUA_TARGET PkgConfig::LUA)
 -    include_directories(${LUA_INCLUDE_DIRS})
 +  elseif(LUA_LIBRARY AND EXISTS "${LUA_LIBRARY}")
-+    # Otherwise LUA_LIBRARIES can hold a bare name like "lua", which leaves the
-+    # linker searching its default paths - and the dependency's lib directory is
-+    # not among them. Use the file find_package already located.
++    # A plain find_package result: use the file it located rather than the name.
 +    set(LUA_TARGET "${LUA_LIBRARY}")
    else()
 -    message(FATAL_ERROR "Lua not found, consider using `bash action-install.sh` to download.")
