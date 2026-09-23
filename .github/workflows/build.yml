@@ -124,68 +124,23 @@ jobs:
           name: ${{ matrix.platform }}
           path: out/${{ matrix.platform }}
 
-  # Upstream's own suite plus the behavioral tests, run against the same
-  # upstream ref, patches and merged plugins the artifacts are built from. The
-  # point is to catch this repository's packaging layer breaking librime itself:
-  # a suite run against an unpatched checkout could not report that.
+  # Upstream's own suite plus the plugins' behavioral tests, run against the
+  # same upstream ref, patches and merged plugins the artifacts are built from.
+  # The point is to catch this repository's packaging layer breaking librime
+  # itself: a suite run against an unpatched checkout could not report that.
   #
-  # A separate job, and a separate build tree, rather than a flag on a slice
-  # build: the suite needs gtest, which is behind vcpkg.json's "tests" feature
-  # so that no artifact build installs a test framework - and so that gtest's
-  # copyright file cannot reach third-party-notices.zip for an artifact that
-  # does not contain it.
+  # The procedure lives in run-tests.yml, shared with the pull request check in
+  # test.yml, so there is one definition of what the tests are. The ref is passed
+  # in from `resolve` rather than resolved again inside, so this job and the
+  # slices it gates cannot disagree about what is being tested.
   test:
     name: test
     needs: resolve
-    runs-on: macos-15
-    env:
-      VCPKG_BINARY_CACHE_DIR: ${{ github.workspace }}/.vcpkg-binary-cache
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite
-    steps:
-      - name: Checkout packaging repository
-        uses: actions/checkout@v7
-        with:
-          submodules: recursive
+    uses: ./.github/workflows/run-tests.yml
+    with:
+      upstream_repo: ${{ inputs.upstream_repo }}
+      upstream_ref: ${{ needs.resolve.outputs.ref }}
 
-      - name: Cache vcpkg binary packages
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
-          # Its own key rather than the macos-arm64 slice's: this tree's
-          # dependency set is that one plus gtest, and actions/cache never
-          # rewrites an existing key, so sharing it would mean whichever job
-          # saved first wins and gtest's archive is recompiled every run. The
-          # slice's key is still a restore-key, so the shared ports come from
-          # its cache and only gtest is added.
-          key: vcpkg-binary-${{ runner.os }}-macos-arm64-tests-${{ hashFiles('vcpkg.json', 'triplets/*.cmake', 'ports/**') }}
-          restore-keys: |
-            vcpkg-binary-${{ runner.os }}-macos-arm64-
-
-      - name: Checkout upstream librime
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.upstream_repo }}
-          ref: ${{ needs.resolve.outputs.ref }}
-          path: vendor/librime
-
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgDirectory: ${{ github.workspace }}/vcpkg
-          vcpkgJsonGlob: "vcpkg.json"
-
-      - name: Setup CMake and Ninja
-        uses: lukka/get-cmake@latest
-
-      - name: Run tests
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
-          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
-          UPSTREAM_REF: ${{ needs.resolve.outputs.ref }}
-          PACKAGING_VERSION: ${{ inputs.packaging_version }}
-          BUILD_TESTS: "1"
-        run: scripts/build-one-arch.sh macos-arm64
 
   package:
     name: package

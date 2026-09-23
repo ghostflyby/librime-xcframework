@@ -1,0 +1,70 @@
+name: test
+
+# Pull request check: run the suites against the change, without building any
+# slice.
+#
+# It exists because the repository has no other automatic check on its own
+# changes. `build.yml` is a release entry point - five slices plus packaging -
+# and is only reached by hand or by `check-upstream` tracking upstream releases,
+# so a pull request that quietly breaks a plugin would be found at release time.
+# The weekly Dependabot updates are the concrete case: vcpkg baselines, action
+# versions, and the plugin submodules. A plugin bump can only be validated by
+# building and exercising it, and `verify_merged_plugins` proves a symbol is
+# present, not that it works.
+#
+# A separate workflow rather than a `pull_request` trigger on `build.yml`: that
+# file's jobs are the release path, and adding a second event would mean guarding
+# every slice and the packaging jobs with `if: github.event_name != ...`, a
+# condition every later edit would have to remember. Here, deleting this file
+# removes the whole feature.
+#
+# This is a check, not a gate: `main` has no required status checks, so a failing
+# run reports rather than blocks. The gate that matters is in `build.yml`, where
+# packaging needs the test job.
+on:
+  pull_request:
+    paths:
+      # Anything that changes what gets built or merged. The plugin paths cover
+      # a submodule bump, which shows up as a change to the submodule's own path.
+      - "plugins/**"
+      - "plugins.json"
+      - ".gitmodules"
+      - "patches/**"
+      - "triplets/**"
+      - "ports/**"
+      - "vcpkg.json"
+      - "scripts/**"
+      # So that an edit to the test procedure is itself tested.
+      - ".github/workflows/run-tests.yml"
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolved once so this run tests one ref, and so an explicitly dispatched run
+  # can pin one. Same resolution as `build.yml`, and the same reason for doing it
+  # in its own job: every job in a run must agree on the ref.
+  resolve:
+    name: resolve upstream ref
+    runs-on: macos-15
+    outputs:
+      ref: ${{ steps.resolve-upstream.outputs.ref }}
+    steps:
+      - name: Resolve upstream ref
+        id: resolve-upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: rime/librime
+        run: |
+          ref="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+
+  test:
+    name: test
+    needs: resolve
+    uses: ./.github/workflows/run-tests.yml
+    with:
+      upstream_repo: rime/librime
+      upstream_ref: ${{ needs.resolve.outputs.ref }}

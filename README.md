@@ -129,7 +129,10 @@ librime's own `rime_test`, and the behavioral tests each plugin keeps in its own
 ctest, so they run and report together. Both run against the same upstream ref,
 patches and merged plugins the artifacts are built from, which is the point — a
 suite run against an unpatched checkout could not report anything about this
-repository. The `test` job in `build.yml` does the same and gates packaging.
+repository. `build.yml` runs the same procedure - it is
+`.github/workflows/run-tests.yml`, a reusable workflow - and packaging depends on
+it, so a failing suite stops a release. Pull requests that touch the build inputs
+run it too, as a check.
 
 The suite needs `gtest`, which is behind `vcpkg.json`'s `tests` feature, so no
 artifact build installs a test framework; `BUILD_TESTS` configures its own tree
