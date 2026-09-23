@@ -51,6 +51,14 @@ This repository is a packaging wrapper for upstream `librime`. Keep changes scop
 - The release workflow should generate `Package.swift` with direct `Rime`, `RimeStatic`, `RimeDynamic`, and `RimeSystem` products using release zip URLs and `swift package compute-checksum`, sync the `Sources/RimeHeaders` headers from the build outputs, commit them together with the matching `Sources/RimeSystem/Rime.apinotes` copy, and tag that commit before creating the GitHub Release.
 - The build workflow must keep a build-only mode (`publish: false`) that builds, packages, and uploads the distribution artifact but neither commits the release manifest nor creates a GitHub Release, so a branch or release candidate can be validated without publishing.
 
+## Tests
+
+- Run upstream librime's suite, and keep it running against the patched, plugin-merged source this repository builds from (`BUILD_TESTS=1 scripts/build-one-arch.sh macos-arm64`, the `test` job in `build.yml`). The point is to catch the packaging layer breaking librime itself; a suite run against an unpatched checkout would report nothing about this repository. `package` depends on that job, so a failing suite stops a release.
+- Keep `gtest` behind the `tests` feature in `vcpkg.json`, and keep artifact builds free of `BUILD_TEST`. Enabling the feature installs gtest into the dependency set, and `collect_vcpkg_notices` globs every port's copyright file - so a slice built with the tests feature would ship gtest's license in `third-party-notices.zip` for an artifact that does not contain gtest. Test mode therefore configures its own tree (`.build/build-<platform>-test`) rather than adding a flag to a slice build.
+- Behavioral tests link a shared librime and drive real input sessions (`tests/`, `scripts/test-*.sh`), because the build-time gates cannot cover behavior. `verify_merged_plugins` checks merged module symbols in the static archive (and only there); nothing checks a module's runtime behavior, so a page key landing in the wrong place - or a lost `"paging"` tag, which is silent - would ship unnoticed. Upstream's suite cannot cover this either: it has no `selector` tests at all.
+- A test that asserts fallback behavior must assert on the outcome a wrong answer would produce, not on an index: a cleared composition and a page turn both report index 0, so an index-only check passes either way. Cross-check any state a plugin publishes against the state the engine actually holds.
+- Behavioral tests need a macOS build tree for the host's architecture, so `BUILD_TESTS` refuses an iOS slice or a non-native arch rather than producing a binary the runner cannot execute.
+
 ## Review
 
 - Use a subagent to explore large or complex codebase changes.

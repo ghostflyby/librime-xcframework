@@ -113,9 +113,84 @@ jobs:
           name: ${{ matrix.platform }}
           path: out/${{ matrix.platform }}
 
+  # Upstream's own suite plus the behavioral tests, run against the same
+  # upstream ref, patches and merged plugins the artifacts are built from. The
+  # point is to catch this repository's packaging layer breaking librime itself:
+  # a suite run against an unpatched checkout could not report that.
+  #
+  # A separate job, and a separate build tree, rather than a flag on a slice
+  # build: the suite needs gtest, which is behind vcpkg.json's "tests" feature
+  # so that no artifact build installs a test framework - and so that gtest's
+  # copyright file cannot reach third-party-notices.zip for an artifact that
+  # does not contain it.
+  test:
+    name: test
+    runs-on: macos-15
+    env:
+      # Same cache as the slices, so the ports both jobs use are built once.
+      VCPKG_BINARY_CACHE_DIR: ${{ github.workspace }}/.vcpkg-binary-cache
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite
+    steps:
+      - name: Checkout packaging repository
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Resolve upstream ref
+        id: resolve-upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          ref="${UPSTREAM_REF}"
+          if [[ -z "${ref}" ]]; then
+            ref="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)"
+          fi
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
+          # Shares the macos-arm64 slice's key: the test tree's dependency set is
+          # the same one plus gtest, and a shared key means neither job rebuilds
+          # the other's ports.
+          key: vcpkg-binary-${{ runner.os }}-macos-arm64-${{ hashFiles('vcpkg.json', 'triplets/*.cmake', 'ports/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-macos-arm64-
+
+      - name: Checkout upstream librime
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.upstream_repo }}
+          ref: ${{ steps.resolve-upstream.outputs.ref }}
+          path: vendor/librime
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
+          vcpkgJsonGlob: "vcpkg.json"
+
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Run tests
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          UPSTREAM_SOURCE_DIR: ${{ github.workspace }}/vendor/librime
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          UPSTREAM_REF: ${{ steps.resolve-upstream.outputs.ref }}
+          PACKAGING_VERSION: ${{ inputs.packaging_version }}
+          BUILD_TESTS: "1"
+        run: scripts/build-one-arch.sh macos-arm64
+
   package:
     name: package
-    needs: build-slice
+    # Tests gate packaging: a suite that fails means this packaging layer breaks
+    # librime, and nothing should be released from it.
+    needs: [build-slice, test]
     runs-on: macos-15
     steps:
       - name: Checkout packaging repository

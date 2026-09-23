@@ -117,6 +117,33 @@ Package existing slice outputs:
 scripts/package-xcframework.sh
 ```
 
+Run the tests:
+
+```bash
+BUILD_TESTS=1 VCPKG_ROOT=/path/to/vcpkg scripts/build-one-arch.sh macos-arm64
+```
+
+That builds one shared tree and runs both suites against it: upstream librime's
+own `rime_test`, and the behavioral tests in `tests/` that drive real input
+sessions. Both run against the same upstream ref, patches and merged plugins the
+artifacts are built from, which is the point — a suite run against an unpatched
+checkout could not report anything about this repository. The `test` job in
+`build.yml` does the same and gates packaging.
+
+The suite needs `gtest`, which is behind `vcpkg.json`'s `tests` feature, so no
+artifact build installs a test framework; `BUILD_TESTS` configures its own tree
+and stops after the tests rather than producing slices. It refuses an iOS slice
+or a non-native architecture, since the test binary has to run on the host.
+
+To run just the behavioral tests against an existing build tree:
+
+```bash
+scripts/test-varpage.sh --build-dir .build/build-macos-arm64-dynamic
+```
+
+The reasoning behind this split, and what a new test must cover, is in
+`AGENTS.md` under Tests.
+
 Packaging also refreshes the sources this repository commits — the public
 headers under `Sources/RimeHeaders/include` — so they always match the
 artifacts that were just produced. The linker stub's skeletons are not committed

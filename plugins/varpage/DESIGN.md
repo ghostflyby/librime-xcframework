@@ -244,4 +244,16 @@ typedef struct rime_varpage_api_t {
 
 **验证**
 
-在本仓库 e2e 构建树（`BUILD_MERGED_PLUGINS=ON` + `ENABLE_EXTERNAL_PLUGINS=OFF`）上做过真机运行验证：模块注册与 `get_api` 可达；无 host 时 `Page_Down` 按 `page_size=5` 移动（与内置一致）；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；`when: paging` 绑定（`default.yaml` 的 `minus → Page_Up`）在翻页后仍生效，即 `paging` 标记未丢；`clear_resolver` 后回退到内置 `[5,10)`。打包侧 `install_plugin_headers` 与 `verify_merged_plugins`（`rime_require_module_varpage`）均通过。
+回归测试在仓库内：`tests/varpage/varpage_test.cc` + `scripts/test-varpage.sh`，对着一棵 `BUILD_SHARED_LIBS=ON` 且合并了本插件的构建树运行真实输入会话。CI 在 `build.yml` 的 `test` job 里跑它（仅 `macos-arm64`，其余四个 slice 是交叉构建，runner 执行不了）。
+
+上游套件与它一起跑，但两者覆盖的东西不同：上游 `rime_test`（90 个用例）验证 patch + 插件没有破坏 librime 本身，而它对 `selector` **零覆盖**——正是本插件改动的部分，所以本插件的断言只能由这里提供。两者由同一条命令驱动：
+
+```bash
+BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
+```
+
+`gtest` 藏在 `vcpkg.json` 的 `tests` feature 后面，且 `BUILD_TESTS` 配置自己的构建树（`.build/build-<platform>-test`）并在测试后停止，因此发布构建既不装测试框架，也不会把 gtest 的版权文件带进 `third-party-notices.zip`。细节与约束记在 `AGENTS.md` 的 Tests 一节。
+
+已覆盖：模块注册与 `get_api`；resolver 答"未知"时 `Page_Down` 按 `page_size` 移动（未注册 resolver 的会话只断言"不发布 property"，因为无 host 时移动与否不影响本插件的行为）；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）且发布 `client` 几何；`turn_page` 双向；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；`when: paging` 绑定在翻页后仍生效（`paging` 标记未丢）；推送路径（推送一个此前从未发布过的页长，否则断言无法失败）；`varpage.index` 与引擎自身高亮（`page_no * page_size + highlighted_candidate_index`）交叉核对；`clear_resolver` 在会话销毁后仍可调用。打包侧 `install_plugin_headers` 与 `verify_merged_plugins`（`rime_require_module_varpage`）均通过。
+
+测试期间用两处反例校准过断言的有效性：把修复前的键位分发逻辑放回去，键位遮蔽测试立刻失败；把 `paging` 标记的写入删掉，翻页后 `minus` 落到 punctuator 上提交出 `你-`——这说明**只断言高亮索引会漏判**（提交与清空 composition 也会让索引回到 0），所以该断言额外要求"未提交文本"且"候选表仍存活"。
