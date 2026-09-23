@@ -57,6 +57,28 @@ bool Resolver(void* user_data,
   return false;
 }
 
+// A host whose answers overlap instead of tiling: the page it reports for the
+// index being turned to starts before the page the highlight is on. Every answer
+// contains the index it was asked about, so nothing about a single answer looks
+// wrong - the defect is only visible when the offset is carried across, which
+// lands the highlight behind where it started. This is the shape the contract's
+// tiling requirement exists to exclude.
+bool UntiledResolver(void* user_data,
+                     RimeSessionId session_id,
+                     size_t index,
+                     RimeVarPage* page) {
+  (void)user_data;
+  (void)session_id;
+  if (index < 6) {
+    page->start = 4;
+    page->length = 4;
+  } else {
+    page->start = 0;
+    page->length = index + 2;
+  }
+  return true;
+}
+
 // Answers "unknown" for everything: the path a host takes when it declines a
 // request, which must leave the built-in arithmetic in charge.
 bool UnknownResolver(void* user_data,
@@ -133,6 +155,27 @@ int main(int argc, char** argv) {
   traits.distribution_code_name = "librime-varpage-test";
   traits.distribution_version = "0";
   traits.app_name = "librime-varpage-test";
+
+  // A selector binding that collides with a select key, deployed as a real user
+  // patch so the loader merges it the way it merges a user's own config. Without
+  // it there is nothing to prove that a configured binding still wins over the
+  // select keys - which is the order the built-in selector implements, and the
+  // reason the replacement delegates every non-page action to the base class.
+  {
+    const std::string patch_path =
+        std::string(user_data_dir) + "/default.custom.yaml";
+    FILE* patch = std::fopen(patch_path.c_str(), "w");
+    if (!patch) {
+      std::printf("FAIL  cannot write %s\n", patch_path.c_str());
+      return 1;
+    }
+    std::fputs("patch:\n"
+               "  selector:\n"
+               "    bindings:\n"
+               "      \"2\": next_candidate\n",
+               patch);
+    std::fclose(patch);
+  }
 
   rime->setup(&traits);
   rime->initialize(&traits);
@@ -280,6 +323,24 @@ int main(int argc, char** argv) {
   Check(TakeCommit(session).empty(),
         "a slot past the end of the host page selects nothing");
 
+  // A digit the config bound to an action must run that action, not select.
+  // The base class looks the key up in the keymap before it falls through to the
+  // select keys; a replacement that computed the slot first would shadow the
+  // binding. The two outcomes are told apart by what happens to the highlight:
+  // the action moves it by one, while the shadowed path resolves a slot and
+  // leaves the selection in a state that resets it.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(varpage->query_page(session, 0, &page) && page.length == 3,
+        "the composition is back on the host's first page");
+  rime->process_key(session, '2', 0);
+  Check(TakeCommit(session).empty(),
+        "a digit bound to next_candidate does not select");
+  Check(Highlighted(session) == 1,
+        "and it moved the highlight instead");
+  Check(varpage->query_page(session, 1, &page) && page.length == 3,
+        "the composition survived, so the binding ran as an action");
+
   // -- Push-only mode and the lifecycle call. --------------------------------
   Check(varpage->clear_resolver(session), "resolver cleared");
   // A length nothing has published before: the highlight is at 0 here, and the
@@ -296,10 +357,121 @@ int main(int argc, char** argv) {
   Check(varpage->set_page(session, 0, 0) == false,
         "a zero-length page is rejected");
 
+  // A host answer that does not tile - a page containing the probe index but
+  // starting before it - must be declined: carrying the offset into it would
+  // move the highlight backwards. The keystroke falls back instead, and the
+  // published source says so.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(varpage->set_resolver(session, &UntiledResolver, nullptr),
+        "an untiled resolver is registered");
+  // Move the highlight with the built-in arithmetic first, so the turn below has
+  // a non-zero offset to carry and something behind it to move back to. With the
+  // resolver answering as it does, applying that offset would land on index 1.
+  rime->process_key(session, 0xFF56, 0);
+  const int before_untiled_turn = Highlighted(session);
+  Check(before_untiled_turn > 1,
+        "the highlight has room behind it before the untiled turn");
+  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+  std::printf("       (untiled answer: %d -> %d, source=%s)\n",
+              before_untiled_turn, Highlighted(session),
+              Property(session, "varpage.source").c_str());
+  Check(Highlighted(session) >= before_untiled_turn,
+        "the highlight did not move backwards on an untiled answer");
+  // The keystroke has to actually fall back, not merely be consumed: a
+  // do-nothing implementation would satisfy "did not move backwards" too. The
+  // fallback is the built-in move, so the highlight lands a whole page further
+  // on, and the published page is the built-in one that follows.
+  const int expected_fallback = before_untiled_turn + page_size;
+  Check(Highlighted(session) == expected_fallback,
+        "and it fell back to the built-in page_size move");
+  // The published page is the built-in page containing the position it landed
+  // on, so its start is that position: 5 + 5 = 10 here, aligning to [10,15).
+  Check(Property(session, "varpage.start") == std::to_string(expected_fallback),
+        "with the built-in page published for the position it landed on");
+  Check(Property(session, "varpage.source") == "fallback",
+        "and the source reports the built-in page was used");
+
+  // A destroyed session must not unregister the session that replaced it. The
+  // allocator can reuse addresses, so this is checked from both sides: the
+  // registration the live session made is what clear_resolver for the dead one
+  // must leave alone.
+  //
+  // Note what is deliberately NOT asserted here. When the allocator hands back
+  // the same addresses, the new session's id is numerically the old one's, and
+  // so is its context - the plugin holds no other identity to tell them apart,
+  // so it cannot detect the swap at all. That is why clear_resolver is a
+  // documented requirement rather than an optimisation, and why this test drives
+  // it rather than pretending the plugin can infer it.
+  {
+    const RimeSessionId first = rime->create_session();
+    rime->select_schema(first, schema_id);
+    rime->simulate_key_sequence(first, input);
+    Check(varpage->set_resolver(first, &Resolver, nullptr),
+          "a session registers under its resolver");
+    RimeVarPage probe_page = {0, 0};
+    Check(varpage->query_page(first, 0, &probe_page) && probe_page.length == 3,
+          "its resolver answers");
+    rime->process_key(first, 0xFF56, 0);
+    Check(Property(first, "varpage.source") == "client",
+          "and its page is published as the host's");
+
+    // A second session registers while the first is still around, so the two
+    // have distinct ids and clearing one cannot be confused with the other.
+    const RimeSessionId second = rime->create_session();
+    rime->select_schema(second, schema_id);
+    rime->simulate_key_sequence(second, input);
+    Check(varpage->set_resolver(second, &Resolver, nullptr),
+          "a second session registers");
+    rime->process_key(second, 0xFF56, 0);
+    Check(Property(second, "varpage.source") == "client",
+          "and it publishes under its own registration");
+
+    Check(varpage->clear_resolver(first),
+          "clearing the first session finds its registration");
+    // Asked of the registry rather than of a property: the property already said
+    // "client" before the clear, so it would still say so if the clear had wiped
+    // everything. The second session's resolver answering is the real evidence.
+    RimeVarPage survivor{0, 0};
+    Check(varpage->query_page(second, 0, &survivor) && survivor.length == 3,
+          "and the second session's registration survived it");
+
+    rime->destroy_session(second);
+    rime->destroy_session(first);
+  }
+
+  // Registering is not invalidated by another engine becoming active for a
+  // while. Opening the schema switcher does exactly that - it makes the session's
+  // active engine the switcher, whose context is a different one - and a
+  // registration keyed on "is the active context the one I was filed under"
+  // would be discarded the first time a user pressed F4, silently and for the
+  // rest of the session. The registration must outlive that.
+  {
+    const RimeSessionId panel_session = rime->create_session();
+    rime->select_schema(panel_session, schema_id);
+    rime->simulate_key_sequence(panel_session, input);
+    Check(varpage->set_resolver(panel_session, &Resolver, nullptr),
+          "a session registers before the switcher opens");
+    // F4 opens the schema switcher in the shipped default.yaml.
+    rime->process_key(panel_session, 0xFFC1 /* F4 */, 0);
+    rime->clear_composition(panel_session);
+    rime->process_key(panel_session, 0xFF1B /* Escape */, 0);
+    // Retype: query_page needs a candidate list to resolve against, and visiting
+    // the panel ends the previous composition.
+    rime->simulate_key_sequence(panel_session, input);
+    RimeVarPage after_panel{0, 0};
+    Check(varpage->query_page(panel_session, 0, &after_panel) &&
+              after_panel.length == 3,
+          "and its resolver still answers after the switcher was used");
+    Check(varpage->clear_resolver(panel_session),
+          "the registration is still there to clear");
+    rime->destroy_session(panel_session);
+  }
+
   rime->destroy_session(session);
-  // The push above re-registered the session, and a registration has to stay
-  // removable once its session is gone - that is what keeps a recycled address
-  // from inheriting one, and it is the reason clear_resolver takes no Context.
+  // A registration has to stay removable once its session is gone - that is what
+  // keeps a recycled address from inheriting one, and it is the reason
+  // clear_resolver takes no Context.
   Check(varpage->clear_resolver(session),
         "clear_resolver works on a destroyed session");
   Check(varpage->clear_resolver(session) == false,

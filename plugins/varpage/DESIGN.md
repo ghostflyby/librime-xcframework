@@ -229,7 +229,7 @@ typedef struct rime_varpage_api_t {
 
 **与设计的三处实现取舍**
 
-1. **拦截方式**：`VarPageSelector::ProcessKeyEvent` 不调用 `Selector::ProcessKeyEvent` 走全程，而是自己重复那几行门闩与布局开关判断，然后**只**把命中 `Selector::PreviousPage` / `Selector::NextPage` 的按键接管（比较函数指针），其余按键（含 `previous_candidate` / `next_candidate` / `home` / `end`）原样委托基类。原因是上游对 selection 键调用的是 `this->SelectCandidateAt(...)`（非虚、非限定），派生类覆盖该方法不会被调用；与其依赖"派生成员指针转基类指针"这类隐晦技巧，不如让派生类显式接管选择键。代价是门闩那 8 行有重复——由 §3.3 第 8 条的语义测试锁定。
+1. **拦截方式**：`VarPageSelector::ProcessKeyEvent` 不调用 `Selector::ProcessKeyEvent` 走全程，而是自己重复那几行门闩与布局开关判断，然后**只**把命中 `Selector::PreviousPage` / `Selector::NextPage` 的按键接管（比较函数指针），其余按键（含 `previous_candidate` / `next_candidate` / `home` / `end`）原样委托基类。原因是上游对 selection 键调用的是 `this->SelectCandidateAt(...)`（非虚、非限定），派生类覆盖该方法不会被调用；与其依赖"派生成员指针转基类指针"这类隐晦技巧，不如让派生类显式接管选择键。代价是门闩那 8 行有重复。这条约束由测试锁定：`varpage_test.cc` 部署一个把数字键 `2` 绑到 `next_candidate` 的用户 patch，断言该键执行动作而非选中候选——把修复前的分发逻辑放回去，该断言立刻失败（已在 scratch 树验证）。
 2. **`previous_page` 的偏移语义**：实现前先确认了 `Highlight` 会夹取（`context.cc:132-149`），因此上游 compact 写法 `selected < page_size ? 0 : selected - page_size` 与推广式 `prev.start + min(offset, prev.length - 1)` 在等长页下**始终**等价。实现采用推广式。
 3. **`next_page` 的末页判定**：先用 `menu->Prepare(current.end() + 1)` 判断"下一页首个候选是否存在"，只有存在时才向 host 询问下一页几何；不存在时按 `page_down_cycle` 回卷（回卷分支不询问 host，落点用基类语义即"第 0 位"）。
 
@@ -256,4 +256,10 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 已覆盖：模块注册与 `get_api`；resolver 答"未知"时 `Page_Down` 按 `page_size` 移动（未注册 resolver 的会话只断言"不发布 property"，因为无 host 时移动与否不影响本插件的行为）；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）且发布 `client` 几何；`turn_page` 双向；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；`when: paging` 绑定在翻页后仍生效（`paging` 标记未丢）；推送路径（推送一个此前从未发布过的页长，否则断言无法失败）；`varpage.index` 与引擎自身高亮（`page_no * page_size + highlighted_candidate_index`）交叉核对；`clear_resolver` 在会话销毁后仍可调用。打包侧 `install_plugin_headers` 与 `verify_merged_plugins`（`rime_require_module_varpage`）均通过。
 
-测试期间用两处反例校准过断言的有效性：把修复前的键位分发逻辑放回去，键位遮蔽测试立刻失败；把 `paging` 标记的写入删掉，翻页后 `minus` 落到 punctuator 上提交出 `你-`——这说明**只断言高亮索引会漏判**（提交与清空 composition 也会让索引回到 0），所以该断言额外要求"未提交文本"且"候选表仍存活"。
+测试期间用反例校准过每一条断言的有效性——把修复放回去或删掉，对应断言必须失败。有几条最初是**无效的**，已改写：只断言"`minus` 被消费"证明不了 `paging` 标记存在（没标记时 punctuator 同样消费它并提交 `你-`，且清空 composition 也让索引回到 0）；"高亮未后退"在起点为 0 时恒真。改写后的版本各自验证过：删掉 `paging` 写入 → 提交断言失败；删掉 `next.start == probe` 的 tiling 守卫 → 高亮从 5 退回 1，断言失败。
+
+**已知限制**：若 host 销毁会话却不调用 `clear_resolver`，而分配器把同一地址交还给下一个会话（实测中这是常态而非例外——id 就是会话地址），新会话的 id 与旧的数值相等，插件没有任何别的身份可比对，因而无法识别这次替换，旧的注册（含 host 的 resolver 与 `user_data`）会被新会话沿用。`clear_resolver` 因此是契约要求，不是可选清理。被沿用的缓存页在使用前仍会与 menu 指针校验，所以已不存在的 composition 不会被误信。
+
+**一处曾引入又移除的机制**：曾尝试在注册表里存 `weak<Session>`，用控制块比对来判断"还是不是同一个会话对象"，从而识别回收。该版本的会话回收行为出现变化（同一 create/destroy 循环、注册 resolver 的情况下，回收次数由 9/9 变为 0/9；未深究成因），而它改善的只是一个已由 `clear_resolver` 契约覆盖的边界情况，因此放弃，改用下面这条更简单的判定，并如实记录限制。
+
+**注册的失效判定只依据"会话是否还存在"**：不能改用"会话当前的活动 context 是否就是注册时那个"，因为切换器面板打开时活动引擎变成切换器本身，那样判定会在用户每次按 F4 后丢弃注册。这条有测试锁定（`varpage_test.cc` 的 switcher 用例）：把判定改回按活动 context 比较，该用例立即失败。

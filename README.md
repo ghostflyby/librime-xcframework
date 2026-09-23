@@ -139,6 +139,17 @@ artifact build installs a test framework; `BUILD_TESTS` configures its own tree
 and stops after the tests rather than producing slices. It refuses an iOS slice
 or a non-native architecture, since the test binary has to run on the host.
 
+The committed headers are checked on their own, without a build:
+
+```bash
+scripts/verify-committed-headers.sh
+```
+
+That is what a pull request runs first, and it covers what the package ships:
+that a plugin's public header is identical in both places it is committed, that
+the umbrella still compiles as a module, and that the API notes and Swift names
+describe the headers next to them.
+
 To run just a plugin's behavioral tests against an existing test tree, either
 select it from ctest or call its runner directly:
 

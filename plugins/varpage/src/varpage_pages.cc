@@ -89,20 +89,53 @@ class PageActionGuard {
   const bool previous_;
 };
 
-// Whether a registration still belongs to a live session, so that one left
-// behind by a destroyed session is dropped instead of serving a successor.
+// Whether the registration belongs to a session that no longer exists, and so
+// is safe to drop.
 //
-// This catches a context the session no longer uses (a schema change builds a
-// new engine) and a session that is gone. It cannot see through a fully
-// recycled (session id, engine, context) triple, where all three allocations
-// land on the same addresses again; that is what clear_resolver is for.
-bool Live(Context* ctx, RimeSessionId session_id) {
-  an<Session> session(Service::instance().GetSession(session_id));
-  if (session)
-    return session->context() == ctx;
-  // The service refuses lookups while it is disabled - during maintenance, for
-  // instance - which is not evidence that the session is gone.
-  return Service::instance().disabled();
+// The only evidence of that is the service not knowing the session any more.
+// Everything else must be treated as alive, because the tempting alternative -
+// asking whether the session's *current* context is the one the entry is filed
+// under - gives the wrong answer routinely: a session's active engine is the
+// schema switcher while its panel is open, so opening the switcher would look
+// like "the context changed" and a purge would throw away the host's resolver
+// and user_data for the rest of the session. A registration is not invalid
+// because another engine is momentarily on top.
+//
+// The service also refuses lookups while it is disabled (during maintenance),
+// which is likewise not evidence of anything; that case keeps the entry too.
+//
+// Consequence worth stating: a destroyed session whose id is handed to a new
+// session is indistinguishable from a live one here, because the id is the
+// session's address and nothing else remains to compare. That is why
+// clear_resolver is a requirement rather than tidy-up. The stale *page* such an
+// entry may carry is still validated against the menu pointer before use.
+bool Gone(const Entry& entry) {
+  if (Service::instance().GetSession(entry.session_id))
+    return false;
+  return !Service::instance().disabled();
+}
+
+// Finds the entry for `ctx`, dropping it when the registration behind it belongs
+// to a session that no longer exists. Every accessor goes through here rather
+// than through the map directly, so a registration left by a destroyed session
+// cannot serve a successor merely because the address came back.
+//
+// Only a definite "gone" drops anything. An unknown answer leaves the entry
+// alone: the cost of keeping a stale entry is one wasted lookup, while the cost
+// of dropping a live one is the host's resolver and user_data lost for the rest
+// of the session.
+//
+// Caller holds the lock.
+Entry* Find(Context* ctx, Table& t) {
+  auto it = t.by_context.find(ctx);
+  if (it == t.by_context.end())
+    return nullptr;
+  if (Gone(it->second)) {
+    t.by_session.erase(it->second.session_id);
+    t.by_context.erase(it);
+    return nullptr;
+  }
+  return &it->second;
 }
 
 // Copies the entry for `ctx` out of the table, dropping it if its session is
@@ -110,33 +143,52 @@ bool Live(Context* ctx, RimeSessionId session_id) {
 bool Lookup(Context* ctx, Entry* entry) {
   Table& t = table();
   std::lock_guard<std::mutex> lock(t.mutex);
-  auto it = t.by_context.find(ctx);
-  if (it == t.by_context.end())
+  Entry* found = Find(ctx, t);
+  if (!found)
     return false;
-  if (!Live(ctx, it->second.session_id)) {
-    t.by_session.erase(it->second.session_id);
-    t.by_context.erase(it);
-    return false;
-  }
-  *entry = it->second;
+  *entry = *found;
   return true;
 }
 
 bool Registered(Context* ctx) {
   Table& t = table();
   std::lock_guard<std::mutex> lock(t.mutex);
-  return t.by_context.find(ctx) != t.by_context.end();
+  return Find(ctx, t) != nullptr;
 }
 
-// Points a session at the context it is using now. The caller holds the lock; a
-// session that switched engines - ApplySchema builds a new one - must not leave
-// the old context holding its registration.
+// Points a session at the context it is using now, creating the registration if
+// this is the first call. The caller holds the lock.
+//
+// Three things have to be true afterwards:
+//
+//   - a session that switched engines - ApplySchema builds a new one - must not
+//     leave the old context holding its registration;
+//   - two sessions must never share one, so a later clear_resolver for a
+//     previous occupant cannot unregister the current one. The reclaim loop
+//     drops any other id still naming this context;
+//   - an entry filed under this context for a *different* session is reset
+//     rather than reused, so a session that arrives at a context a previous one
+//     used starts from a clean slate instead of inheriting its reported page.
+//     Only the numeric id is available to tell them apart, so this cannot see a
+//     session whose id came back after destruction - see Gone() for that limit
+//     and why clear_resolver is required.
 void Retarget(Context* ctx, RimeSessionId session_id, Table& t) {
+  for (auto it = t.by_session.begin(); it != t.by_session.end();) {
+    if (it->first != session_id && it->second == ctx)
+      it = t.by_session.erase(it);
+    else
+      ++it;
+  }
+
   auto previous = t.by_session.find(session_id);
   if (previous != t.by_session.end() && previous->second != ctx)
     t.by_context.erase(previous->second);
   t.by_session[session_id] = ctx;
-  t.by_context[ctx].session_id = session_id;
+
+  Entry& entry = t.by_context[ctx];
+  if (entry.session_id != session_id)
+    entry = Entry{};
+  entry.session_id = session_id;
 }
 
 void UpsertResolver(Context* ctx,
@@ -154,13 +206,13 @@ void UpsertResolver(Context* ctx,
 void StorePage(Context* ctx, const void* menu, const PageGeometry& page) {
   Table& t = table();
   std::lock_guard<std::mutex> lock(t.mutex);
-  auto it = t.by_context.find(ctx);
-  if (it == t.by_context.end())
+  Entry* entry = Find(ctx, t);
+  if (!entry)
     return;
-  it->second.has_page = true;
-  it->second.menu = menu;
-  it->second.page_start = page.start;
-  it->second.page_length = page.length;
+  entry->has_page = true;
+  entry->menu = menu;
+  entry->page_start = page.start;
+  entry->page_length = page.length;
 }
 
 // Forgets the stored report. Called when the composition empties, so the next
@@ -168,9 +220,8 @@ void StorePage(Context* ctx, const void* menu, const PageGeometry& page) {
 void DropReport(Context* ctx) {
   Table& t = table();
   std::lock_guard<std::mutex> lock(t.mutex);
-  auto it = t.by_context.find(ctx);
-  if (it != t.by_context.end())
-    it->second.has_page = false;
+  if (Entry* entry = Find(ctx, t))
+    entry->has_page = false;
 }
 
 bool CachedPage(Context* ctx,
@@ -179,13 +230,10 @@ bool CachedPage(Context* ctx,
                 PageGeometry* page) {
   Table& t = table();
   std::lock_guard<std::mutex> lock(t.mutex);
-  auto it = t.by_context.find(ctx);
-  if (it == t.by_context.end())
+  const Entry* entry = Find(ctx, t);
+  if (!entry || !entry->has_page || entry->menu != menu)
     return false;
-  const Entry& entry = it->second;
-  if (!entry.has_page || entry.menu != menu)
-    return false;
-  PageGeometry cached{entry.page_start, entry.page_length};
+  PageGeometry cached{entry->page_start, entry->page_length};
   if (!cached.Contains(index))
     return false;
   *page = cached;
@@ -352,8 +400,14 @@ bool NextPage(Schema* schema, Context* ctx) {
     }
     PageGeometry next;
     bool next_from_host = false;
+    // The page after this one has to begin where this one ends; that is the
+    // tiling the contract asks of a host, and it is what makes the turn move
+    // forward. A page that merely *contains* the probe index may start before it,
+    // and carrying the offset into it would land the highlight behind where it
+    // started. A host that answers that way falls back for this keystroke, which
+    // varpage.source reports.
     if (ResolvePage(schema, ctx, probe, &next, &next_from_host) &&
-        next_from_host) {
+        next_from_host && next.start == probe) {
       const size_t offset =
           std::min(selected - current.start, next.length - 1);
       const size_t target = next.start + offset;
@@ -376,10 +430,17 @@ bool NextPage(Schema* schema, Context* ctx) {
     return true;
   }
   // Highlight clamps to the last candidate, which is what the built-in's
-  // explicit clamp to candidate_count - 1 amounts to.
-  const size_t target = selected + page_size;
-  HighlightAndTag(ctx, target);
-  PublishUsed(ctx, target, FixedPage(schema, target), false);
+  // explicit clamp to candidate_count - 1 amounts to. What gets published has to
+  // be the position the engine actually holds, not the one asked for, because
+  // varpage.index is defined as the highlighted candidate - a host reading a
+  // clamped-away index would render a highlight that is not there.
+  const size_t requested = selected + page_size;
+  HighlightAndTag(ctx, requested);
+  // Re-read after the move, and only while a segment is still there: the move's
+  // notifier can rebuild or empty the composition.
+  const size_t landed =
+      comp.empty() ? requested : comp.back().selected_index;
+  PublishUsed(ctx, landed, FixedPage(schema, landed), false);
   return true;
 }
 

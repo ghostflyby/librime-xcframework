@@ -34,6 +34,10 @@ on:
       - "ports/**"
       - "vcpkg.json"
       - "scripts/**"
+      # The committed headers are what the package ships, and one of them is a
+      # plugin's public API. They are validated without a build, since a mistake
+      # there would otherwise surface while preparing a release.
+      - "Sources/**"
       # So that an edit to the test procedure is itself tested.
       - ".github/workflows/run-tests.yml"
       - ".github/workflows/test.yml"
@@ -43,6 +47,19 @@ permissions:
   contents: read
 
 jobs:
+  # The committed headers, checked before anything is built: it is seconds of
+  # work, and a failure here should not wait behind a vcpkg bootstrap to be
+  # reported.
+  headers:
+    name: committed headers
+    runs-on: macos-15
+    steps:
+      - name: Checkout packaging repository
+        uses: actions/checkout@v7
+
+      - name: Verify committed headers
+        run: scripts/verify-committed-headers.sh
+
   # Resolved once so this run tests one ref, and so an explicitly dispatched run
   # can pin one. Same resolution as `build.yml`, and the same reason for doing it
   # in its own job: every job in a run must agree on the ref.

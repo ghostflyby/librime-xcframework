@@ -118,10 +118,20 @@ typedef struct rime_varpage_page {
 
 // Resolve the page holding the candidate at absolute index `index`.
 //
-// Called synchronously from inside key handling, only for indices known to hold
-// a candidate. Return true and fill `page`, or return false to say "unknown" -
-// the module then uses the built-in page_size arithmetic for that keystroke.
-// `user_data` is what was passed to set_resolver.
+// Called synchronously from inside key handling, and also by query_page. Only
+// ever called for indices known to hold a candidate. Return true and fill
+// `page`, or return false to say "unknown" - the module then uses the built-in
+// page_size arithmetic for that keystroke. `user_data` is what was passed to
+// set_resolver.
+//
+// The returned page must contain `index`, and pages must tile the candidate
+// list: the page after a given one begins where that one ends. Page Down relies
+// on that, because it asks about the candidate just past the current page and
+// carries the highlight's offset into whatever page comes back - an answer that
+// starts earlier would move the highlight backwards, so such an answer is
+// declined and the built-in arithmetic serves that keystroke instead. (Page Up
+// asks about the candidate just before the current page, which already forces an
+// answer that starts no later than that, so it needs no such check.)
 //
 // Do not call librime's mutating entry points from here (see the file comment);
 // reading candidates is fine.
