@@ -9,11 +9,12 @@
 // silent, because it only stops key_binder's `when: paging` bindings from
 // firing.
 //
-// Assertions are plain checks rather than a test framework on purpose: gtest is
-// not a dependency of this repository, and adding it would install a test
-// framework into every slice's dependency set, iOS included, for a test that
-// only ever runs on macOS. The upstream suite is not an option either - it has
-// no coverage of selector at all, so it cannot see any of this.
+// Assertions are plain checks rather than a test framework on purpose. Upstream
+// librime's suite cannot host these - it has no coverage of selector at all, so
+// it cannot see any of this - and this test has to be runnable against any tree
+// the artifacts came from, including a dynamic slice whose dependency set has no
+// gtest. It therefore links the shipped library from a bare compiler invocation
+// and brings nothing with it.
 //
 // The harness registers a page table nothing like the built-in page_size (3
 // then 4), which is what lets each assertion tell the two models apart.

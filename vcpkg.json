@@ -24,5 +24,13 @@
     "boost-signals2",
     "boost-uuid",
     "boost-vmd"
-  ]
+  ],
+  "features": {
+    "tests": {
+      "description": "Upstream librime's test suite. Enables BUILD_TEST, which needs gtest; selected only by the CI test job and never by a build that produces artifacts, so releases do not depend on a test framework.",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  }
 }

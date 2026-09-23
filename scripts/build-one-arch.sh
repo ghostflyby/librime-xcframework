@@ -59,12 +59,47 @@ case "${slice}" in
     ;;
 esac
 
+# Test mode. Validated here, before anything is deleted or exported: a refused
+# run must not first destroy the slice's previous output, and `BUILD_TESTS` must
+# not be accepted loosely - values like "true" would take the artifact path, run
+# no tests, and still exit 0, which is the one failure this mode cannot afford.
+# Unset means artifact mode; set to anything other than 0 or 1 is an error, empty
+# included, because an empty value is a mistake rather than a request to skip.
+build_tests="${BUILD_TESTS-0}"
+if [[ -z "${build_tests}" ]]; then
+  printf 'BUILD_TESTS is set but empty; set it to 1 to run the tests, or unset it\n' >&2
+  exit 2
+fi
+case "${build_tests}" in
+  0 | 1) ;;
+  *)
+    printf 'BUILD_TESTS must be 0 or 1, got: %s\n' "${build_tests}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${build_tests}" -eq 1 ]]; then
+  case "${slice}" in
+    macos-* | arm64 | x86_64) ;;
+    *)
+      printf 'BUILD_TESTS needs a macOS slice: the test binary has to run on this host, and %s builds for %s\n' \
+        "${platform}" "${cmake_system_name:-macOS}" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "${arch}" != "$(uname -m)" ]]; then
+    printf 'BUILD_TESTS builds for %s but this host is %s; the test binary would not run\n' \
+      "${arch}" "$(uname -m)" >&2
+    exit 2
+  fi
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 work_dir="${WORK_DIR:-${repo_root}/.build}"
 build_dir="${work_dir}/build-${platform}"
 static_build_dir="${build_dir}-static"
 dynamic_build_dir="${build_dir}-dynamic"
+test_build_dir="${build_dir}-test"
 source_work_dir="${work_dir}/src-${platform}"
 install_dir="${OUT_DIR:-${repo_root}/out}/${platform}"
 static_install_dir="${install_dir}/static"
@@ -121,8 +156,16 @@ for tool in cmake ninja; do
   fi
 done
 
-rm -rf "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${install_dir}"
-mkdir -p "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${static_install_dir}" "${dynamic_install_dir}"
+rm -rf "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${test_build_dir}"
+mkdir -p "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}"
+
+# Test mode neither writes nor clears out/<platform>: it produces no artifacts,
+# and a run that removed a slice built earlier would be a surprise for anyone
+# running the two modes back to back.
+if [[ "${build_tests}" -eq 0 ]]; then
+  rm -rf "${install_dir}"
+  mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
+fi
 
 if [[ "${build_from_worktree}" -eq 0 ]]; then
   printf 'exporting %s from %s\n' "${upstream_ref}" "${source_dir}"
@@ -172,13 +215,26 @@ configure_common=(
   -DWITH_STATIC_DEPS=ON
   -DBUILD_MERGED_PLUGINS=ON
   -DBUILD_SEPARATE_LIBS=OFF
-  -DBUILD_TEST=OFF
-  -DBUILD_TESTING=OFF
   -DBUILD_TOOLS=OFF
   -DBUILD_SAMPLE=OFF
   -DENABLE_EXTERNAL_PLUGINS=OFF
 )
 
+# Upstream's test suite is a separate mode rather than a flag on the artifact
+# build, for two reasons: it needs gtest, which comes from the manifest's
+# "tests" feature precisely so artifact builds never install a test framework;
+# and it needs BUILD_SHARED_LIBS, which upstream requires before it will add its
+# test directory at all. Reusing this script is what makes the suite run against
+# the same upstream ref, patches and merged plugins as the artifacts - the point
+# of running it is to catch the packaging layer breaking librime itself, which a
+# separately configured build could not show. The mode, and the guards that keep
+# it to a runnable host, were validated at the top of this script.
+if [[ "${build_tests}" -eq 1 ]]; then
+  configure_common+=(-DBUILD_TEST=ON -DBUILD_TESTING=ON)
+  configure_common+=(-DVCPKG_MANIFEST_FEATURES=tests)
+else
+  configure_common+=(-DBUILD_TEST=OFF -DBUILD_TESTING=OFF)
+fi
 if [[ -n "${cmake_system_name}" ]]; then
   configure_common+=(-DCMAKE_SYSTEM_NAME="${cmake_system_name}")
 fi
@@ -198,6 +254,34 @@ configure_and_install() {
     -DBUILD_SHARED_LIBS="${shared_libs}"
 
   cmake --build "${output_dir}" --config "${configuration}" --target install
+}
+
+# Builds and runs the two suites against one tree: upstream's own tests, and the
+# behavioral tests in tests/ that drive real input sessions. Both run against
+# the source this script prepared - the same ref, patches and merged plugins the
+# artifacts would come from - which is the whole point: a suite that ran against
+# an unpatched checkout could not report anything about this repository.
+run_tests() {
+  cmake "${configure_common[@]}" \
+    -B "${test_build_dir}" \
+    -DCMAKE_INSTALL_PREFIX="${test_build_dir}/install" \
+    -DBUILD_SHARED_LIBS=ON
+
+  cmake --build "${test_build_dir}" --config "${configuration}" \
+    --target rime_test
+
+  printf 'running upstream librime tests\n'
+  # ctest rather than invoking the binary directly: it honours the working
+  # directory upstream registers, where the test data files sit. --no-tests=error
+  # because a suite that registers nothing still exits 0 by default, and this
+  # job's exit status is its only signal.
+  (
+    cd "${test_build_dir}"
+    ctest --output-on-failure --no-tests=error
+  )
+
+  printf 'running the varpage behavioral tests\n'
+  "${script_dir}/test-varpage.sh" --build-dir "${test_build_dir}"
 }
 
 prune_exported_headers() {
@@ -324,6 +408,15 @@ collect_librime_bundled_notices() {
     printf 'warning: utf8-cpp license text not found for the notices bundle\n' >&2
   fi
 }
+
+# Test mode stops here: it exists to validate the packaging layer against
+# librime, not to produce artifacts, and building the static and dynamic slices
+# as well would only make a failing test slower to report.
+if [[ "${build_tests}" -eq 1 ]]; then
+  run_tests
+  printf 'tests passed for %s (source: %s)\n' "${platform}" "${upstream_ref}"
+  exit 0
+fi
 
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
 
