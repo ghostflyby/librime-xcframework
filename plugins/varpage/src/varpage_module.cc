@@ -33,29 +33,6 @@ bool rime_varpage_clear_resolver(RimeSessionId session_id) {
   return varpage::ClearResolver(session_id);
 }
 
-bool rime_varpage_set_page(RimeSessionId session_id,
-                           size_t start,
-                           size_t length) {
-  return varpage::SetClientPage(session_id, start, length);
-}
-
-bool rime_varpage_turn_page(RimeSessionId session_id, bool backward) {
-  return varpage::TurnPage(session_id, backward);
-}
-
-bool rime_varpage_query_page(RimeSessionId session_id,
-                             size_t index,
-                             RimeVarPage* out) {
-  if (!out)
-    return false;
-  varpage::PageGeometry page;
-  if (!varpage::QueryPage(session_id, index, &page))
-    return false;
-  out->start = page.start;
-  out->length = page.length;
-  return true;
-}
-
 RimeVarPageApi* rime_varpage_get_api() {
   // std::call_once rather than a data_size guard: a concurrent first call could
   // otherwise observe data_size set while the function pointers were still
@@ -66,9 +43,6 @@ RimeVarPageApi* rime_varpage_get_api() {
     RIME_STRUCT_INIT(RimeVarPageApi, api);
     api.set_resolver = &rime_varpage_set_resolver;
     api.clear_resolver = &rime_varpage_clear_resolver;
-    api.set_page = &rime_varpage_set_page;
-    api.turn_page = &rime_varpage_turn_page;
-    api.query_page = &rime_varpage_query_page;
   });
   return &api;
 }

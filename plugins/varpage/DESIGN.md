@@ -65,14 +65,14 @@
 
 ### 3.4 页解析：调用点与成本
 
-13. 解析方式：按 session 注册 resolver 回调；客户端亦可推送当前页作为缓存。**插件不持有页表**，只缓存"最近一次答案"。
+13. 解析方式：按 session 注册 resolver 回调。**插件不持有任何页几何**——不保存页表，也不缓存客户端的答案。客户端拥有布局，插件每次需要时就问。
 14. 调用点仅三处，且只在真正涉及页边界时调用：
 
 | 按键动作 | resolver 调用 | 说明 |
 | --- | --- | --- |
-| `next_page` | 冷缓存 2（当前页 + 目标页），有已报告缓存时 1 | 先用 `Prepare(cur.end + 1)` 判定是否有下一页；末页则 0 次 |
-| `previous_page` | 冷缓存 2（当前页 + 上一页），有已报告缓存时 1；`cur.start == 0` 时见下行 | `page(cur.start - 1)` |
-| 选择键 | 1；当前页有有效缓存时 0 次 | `page(selected_index)` |
+| `next_page` | 2（当前页 + 下一页） | `page(cur.end)`；末页则不问第二页 |
+| `previous_page` | 2（当前页 + 上一页）；`cur.start == 0` 时 0 次 | `page(cur.start - 1)` |
+| 选择键 | 1 | `page(selected_index)`，用来取槽位基址 |
 | `previous_candidate` / `next_candidate` | **0** | 跨页时仅把几何标为 stale |
 | `home` / `end` | **0** | 同上 |
 | 未命中动作的键 | **0** | 门闩后直接返回 |
@@ -80,8 +80,8 @@
 **候选移动（最频繁的操作）与页面几何完全解耦**：插件不因移动候选而询问客户端。
 
 15. **resolver 契约**：插件只以"确实存在候选"的索引调用；客户端返回该索引所在页 `[start, length)`（`length > 0`）；返回 false 表示"未知"，插件立即回退定长页算术。插件校验 `start <= index < start + length`，不满足同样视为未知。
-16. **页应连续铺满候选表**（相邻页首尾相接）。这是任何真实布局的自然结果；插件不依赖它保证位置合法（`page(i)` 按定义包含 `i`，故目标位置恒合法），但用作 `next_page` 目标即"下一页首个候选"的解释依据。
-17. **失效**：缓存条目形如 `{menu 指针, start, length}`，仅当三者与当前段一致且高亮落在区间内时有效；订阅 `update_notifier` / `select_notifier` 时**只作废、不调用 resolver**（避免通知风暴，且 `update_notifier` 由 `Context::Highlight` 触发，`engine.cc` 会据此重跑 `Compose`）。schema 切换经 `Context::Clear()` 触发 `update_notifier`，同样覆盖。
+16. **页应连续铺满候选表**（相邻页首尾相接）。这是任何真实布局的自然结果，但 Page Down 依赖它：翻页问的是"当前页结束处的那个候选属于哪一页"，并用这个答案当作下一页的起点；只包含该索引、却从更早处开始的答案会被拒绝（否则带着页内偏移落进去会让高亮**后退**）。Page Up 不需要这条检查——它问的是当前页起点之前一个候选，`Contains` 已强制答案不会更晚开始。
+17. **通知**：订阅 `update_notifier` / `select_notifier`，只做一件事——把当前高亮写进 `varpage.index`。**不在通知里调用 resolver**：`update_notifier` 由 `Context::Highlight` 触发，`engine.cc` 会据此重跑 `Compose`，在其中回调客户端既无必要也会放大开销。
 
 ### 3.5 resolver 的执行环境（安全边界）
 
@@ -98,10 +98,10 @@
 
 ### 3.6 通道与回退
 
-22. **发布**：解析或推送得到的几何写入会话 property（见 §5），使 Lua 与客户端可读同一份真相。发布的是**该动作实际使用的**几何，不是事后重新解析的结果——重新解析可能与放置高亮的几何不一致，而据此渲染的客户端会画出高亮并不在的那一页。
+22. **发布**：插件把自己移动到的位置写入会话 property（见 §5），使 Lua 与客户端可读同一份真相。属性只包含**插件自身能确定**的东西——高亮位置与它所依据的模型；页几何归客户端，插件不再抄一份。
 23. **一个按键只用一个模型**：翻页时"当前页"与"目标页"要么都来自 resolver，要么都由定长算术处理。混用会出问题：偏移量是在来源页里量的，落到另一模型的页面上可能把高亮**往回**移。因此客户端对"它已排版的每一页"都应当应答，而不是只应答可见页。
-24. **回退链**：有效缓存 → 用它；否则有 resolver → 调用；否则 / 返回未知 / 目标页无法解析 → 整个按键走定长页算术。**无客户端参与时与内置 selector 行为等价**（第 2 条不变式）。
-25. **UI 翻页入口**：暴露 `turn_page(backward)`，与键盘走同一代码路径（含 `raw` 段门闩、`page_down_cycle` 与 `paging` 标记），使 UI 按钮/手势获得与键盘一致的语义。这是必需的：C API 的 `change_page` 不经过任何 processor（`rime_api_impl.h:1007-1028`），只能由插件自备。
+24. **回退链**：有 resolver 且答案有效 → 用它；否则 / 返回未知 / 目标页无法解析 → 整个按键走定长页算术。**无客户端参与时与内置 selector 行为等价**（第 2 条不变式）。
+25. **不做这些事**（每条都曾是接口的一部分，后来删掉，理由记在 §10）：不接收客户端报送的页（`set_page`）、不代客户端翻页（`turn_page`）、不提供"某索引在哪一页"的查询（`query_page`）。三者的共同点是**答案本来就在客户端手里**——它拥有布局。插件只做客户端做不到的那部分：在按键路径里询问、校验答案、回退，以及维护只有引擎内部能写的段标记。
 
 ## 4. 公开 API
 
@@ -124,9 +124,6 @@ typedef struct rime_varpage_api_t {
   int data_size;
   bool (*set_resolver)(RimeSessionId, RimeVarPageResolver, void* user_data);
   bool (*clear_resolver)(RimeSessionId);
-  bool (*set_page)(RimeSessionId, size_t start, size_t length); /* 渲染后推送 */
-  bool (*turn_page)(RimeSessionId, bool backward);              /* UI 翻页 */
-  bool (*query_page)(RimeSessionId, size_t index, RimeVarPage* out);
 } RimeVarPageApi;
 ```
 
@@ -143,10 +140,10 @@ typedef struct rime_varpage_api_t {
 
 | 键 | 值 |
 | --- | --- |
-| `varpage.index` | 当前高亮绝对索引 |
-| `varpage.start` | 当前页起点 |
-| `varpage.length` | 当前页长度 |
-| `varpage.source` | `client` / `fallback` / `stale` |
+| `varpage.index` | 当前高亮绝对索引（组合结束时清空） |
+| `varpage.source` | 最近一次翻页所依据的模型：`client` / `fallback`（组合结束时清空） |
+
+`source` 只由翻页动作写入，所以它**不做诊断之外的事**：它回答"上一次翻页走的是谁"，不描述当前页。
 
 写入前先比较，值未变则不写，避免无意义通知。
 
@@ -161,7 +158,7 @@ typedef struct rime_varpage_api_t {
 
 ### 6.2 插件禁止
 
-5. 禁止保存页表；只允许缓存"最近一次答案"，且必须按第 17 条校验有效性。
+5. 禁止保存页表，也不要把布局抄一份给插件——插件不再接收报送的几何，客户端自己的布局就是唯一真相。
 6. 禁止在 `update_notifier` / `select_notifier` 里回调客户端。
 7. 禁止在构造时缓存 `select_keys`（第 10 条）。
 8. 禁止改写 `menu.page_size` 等 C API 结构体字段，也禁止改写 `get_context` 返回的 `RimeContext`。
@@ -170,9 +167,9 @@ typedef struct rime_varpage_api_t {
 ### 6.3 客户端必须
 
 10. `destroy_session` 之前调用 `clear_resolver`。
-11. 每次渲染后重新推送当前页（`set_page`）。index 不是稳定标识：filter（置顶、长词优先、降权、删词、去重）会重排候选，过期几何会被静默采纳。
+11. 每次渲染后刷新自己的布局，并保证 resolver 对**已排版的每一页**都能回答，而不只是可见那一页——翻页问的是下一页的首个候选，它可能还没上屏；答不出来该次翻页会整体退回定长算术。
 12. 高亮/选中一律使用绝对索引的 `highlight_candidate` / `select_candidate`，并停用 `change_page` 与 `*_on_current_page`。
-13. 渲染时自检：高亮索引若落在当前页之外，立即重算并推送（Lua 裸写 `segment.selected_index` 不触发任何通知，插件无法感知）。
+13. 渲染时自检：高亮索引若落在已知页之外，立即重算布局（filter 会重排候选，Lua 也可能裸写 `segment.selected_index`，插件无从感知）。
 14. 若通过 `traits.modules` 显式传模块列表，必须包含 `varpage`（否则 `kDefaultModules` 被整体替换，插件不加载）。
 15. 若要 `select_labels`，把 `menu/page_size` 设为 UI 能显示的最大页容量——`select_labels` 的长度上限就是它，且只在 schema 列表长度 ≥ `page_size` 时给出。
 
@@ -180,12 +177,13 @@ typedef struct rime_varpage_api_t {
 
 16. 不要在 resolver 内调用 `process_key`、`highlight`、`select`、`set_option`、`set_property`、`apply_schema`（第 19 条）。
 17. 不在切换器打开时读写 `varpage.*`：此时活动引擎是 switcher（`service.cc:59-65`，`switcher.cc:247`），读写落在它的上下文。
-18. 不要在 `process_key` 返回前依赖 `varpage.*` 的最终值：`set_page` / resolver 走 property 通道会**同步重入**你的通知处理函数。通知处理里不要调用 `process_key` 或 `get_context`。
-19. 不要把 `varpage.*` 当稳定标识用；它描述的是"此刻"，且可能为 `stale`。
+18. 不要在 `process_key` 返回前依赖 `varpage.*` 的最终值：插件写 property 会**同步重入**你的通知处理函数（在 librime 持有 service 锁的状态下）。通知处理里不要调用 librime 任何入口。
+19. 不要把 `varpage.*` 当稳定标识用；它描述的是"此刻"。特别地，`varpage.source` 只记录最近一次翻页所依据的模型，不描述当前页。
+20. 若接受"`-` / `,` 这类键在翻页后应转为翻页键"这一行为，请注意它由**键盘**翻页点亮（段上的 `paging` 标记），客户端自己用 `highlight_candidate` 移动高亮不会点亮它——内置 selector 的候选移动同样不点亮。C API 的 `change_page` 会点亮，所以从它迁移过来等于放弃该行为。
 
 ### 6.5 打包（本仓库）
 
-20. `plugins.json` 加条目：`name` / `module` 均为 `varpage`、`path: plugins/varpage`、`local: true`、`license: BSD-3-Clause`。
+21. `plugins.json` 加条目：`name` / `module` 均为 `varpage`、`path: plugins/varpage`、`local: true`、`license: BSD-3-Clause`。
 21. 头文件放 `plugins/varpage/include/*.h`，由 `install_plugin_headers` 自动进入导出 include（只收 `local: true` 条目的 `include/*.h`）；在 `Sources/RimeHeaders/include/RimeShim.h` 加一行 `#include "rime_varpage_api.h"`。无 flavor 声明 ⇒ 无需改 `Rime.apinotes`。
 22. CMake 遵守上游插件契约（`plugin_name` / `plugin_objs` / `plugin_deps` / `plugin_modules`），并声明 `plugin_modules "varpage"`。
 
@@ -237,6 +235,16 @@ typedef struct rime_varpage_api_t {
 
 `ctx->Highlight()` 会触发 `update_notifier` → 我们的 `OnContextChanged` 会据当前几何发布 property。因此**必须先把新几何存入表、再移动高亮**，否则那次通知会以"高亮已离开旧页、新页又还不知道"的状态发布一次 `stale`。`NextPage` / `PreviousPage` 均已按此顺序书写。
 
+**删掉的三个接口（及其理由）**
+
+第一版暴露了 `set_page`（客户端报送当前页，插件缓存）、`turn_page`（代客户端翻页）、`query_page`（问某索引在哪一页）。三者都删了，因为**答案本来就在客户端手里**——它拥有布局：
+
+- `set_page` 让插件抄一份客户端的状态，于是要维护 `menu` 指针校验、报送失效、`stale` 状态、组合结束时的清除，而收益只是"翻页时 resolver 少问一次"。客户端在自己的结构里存布局，resolver 直接查，等价且无副本。
+- `turn_page` 的调用者只有客户端，而客户端自己就能算出目标索引（它有布局），再用 `highlight_candidate` 落位。它唯一多给的是段上的 `paging` 标记——但那是**引擎内部状态**，不是翻页服务。剔除之后它剩下的只是标记。
+- `query_page` 让插件代表客户端去问客户端自己。客户端既然算出了布局，就已经知道答案。
+
+收敛后的判据是：**凡是客户端能自己回答的，都不进接口**。插件保留的只有客户端做不到的两件事——在按键路径里询问并决定回退，以及写引擎内部的段标记（那是插件自己移动的结果，自动写入）。
+
 **未实现（有意）**
 
 - `menu/alternative_select_labels` 不参与：它是渲染侧元数据，`select_labels` 由 C API 按 `page_size` 给出，与本插件的页模型无关（§8 第 2 条）。
@@ -254,11 +262,13 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 `gtest` 藏在 `vcpkg.json` 的 `tests` feature 后面，且 `BUILD_TESTS` 配置自己的构建树（`.build/build-<platform>-test`）并在测试后停止，因此发布构建既不装测试框架，也不会把 gtest 的版权文件带进 `third-party-notices.zip`。细节与约束记在 `AGENTS.md` 的 Tests 一节。
 
-已覆盖：模块注册与 `get_api`；resolver 答"未知"时 `Page_Down` 按 `page_size` 移动（未注册 resolver 的会话只断言"不发布 property"，因为无 host 时移动与否不影响本插件的行为）；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）且发布 `client` 几何；`turn_page` 双向；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；`when: paging` 绑定在翻页后仍生效（`paging` 标记未丢）；推送路径（推送一个此前从未发布过的页长，否则断言无法失败）；`varpage.index` 与引擎自身高亮（`page_no * page_size + highlighted_candidate_index`）交叉核对；`clear_resolver` 在会话销毁后仍可调用。打包侧 `install_plugin_headers` 与 `verify_merged_plugins`（`rime_require_module_varpage`）均通过。
+52 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册。
+
+断言的有效性用反例校准过：去掉 tiling 守卫 → 高亮从 5 退回 1，3 条失败；不写 `paging` 标记 → 3 条失败；按"活跃 context"判定注册失效（切换器回归）→ 3 条失败。
 
 测试期间用反例校准过每一条断言的有效性——把修复放回去或删掉，对应断言必须失败。有几条最初是**无效的**，已改写：只断言"`minus` 被消费"证明不了 `paging` 标记存在（没标记时 punctuator 同样消费它并提交 `你-`，且清空 composition 也让索引回到 0）；"高亮未后退"在起点为 0 时恒真。改写后的版本各自验证过：删掉 `paging` 写入 → 提交断言失败；删掉 `next.start == probe` 的 tiling 守卫 → 高亮从 5 退回 1，断言失败。
 
-**已知限制**：若 host 销毁会话却不调用 `clear_resolver`，而分配器把同一地址交还给下一个会话（实测中这是常态而非例外——id 就是会话地址），新会话的 id 与旧的数值相等，插件没有任何别的身份可比对，因而无法识别这次替换，旧的注册（含 host 的 resolver 与 `user_data`）会被新会话沿用。`clear_resolver` 因此是契约要求，不是可选清理。被沿用的缓存页在使用前仍会与 menu 指针校验，所以已不存在的 composition 不会被误信。
+**已知限制**：若 host 销毁会话却不调用 `clear_resolver`，而分配器把同一地址交还给下一个会话（实测中这是常态而非例外——id 就是会话地址），新会话的 id 与旧的数值相等，插件没有任何别的身份可比对，因而无法识别这次替换，旧的注册（含 host 的 resolver 与 `user_data`）会被新会话沿用。`clear_resolver` 因此是契约要求，不是可选清理。
 
 **一处曾引入又移除的机制**：曾尝试在注册表里存 `weak<Session>`，用控制块比对来判断"还是不是同一个会话对象"，从而识别回收。该版本的会话回收行为出现变化（同一 create/destroy 循环、注册 resolver 的情况下，回收次数由 9/9 变为 0/9；未深究成因），而它改善的只是一个已由 `clear_resolver` 契约覆盖的边界情况，因此放弃，改用下面这条更简单的判定，并如实记录限制。
 

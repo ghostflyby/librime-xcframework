@@ -26,7 +26,7 @@
  *     the "paging" tag the segment carries after a page turn or a candidate
  *     move, which is what enables key_binder's `when: paging` bindings.
  *
- * With no host involved, or when the host answers "unknown", the module falls
+ * With no host registered, or when the host answers "unknown", the module falls
  * back to the built-in arithmetic, so it is a drop-in replacement.
  *
  * There is deliberately no configuration switch to turn it off. Whether pages
@@ -36,60 +36,66 @@
  * pages would get a silently misplaced highlight, which is the failure this
  * module exists to prevent.
  *
- * Getting the page boundaries in - the host either answers when asked, or
- * reports after rendering, or both:
+ * Only one thing is asked of the host: answer, for a candidate index, which page
+ * contains it. Everything else the module does with page geometry is derived
+ * from that, and everything the host does with pages it already knows - it is
+ * the side computing the layout. In particular:
  *
- *   - `set_resolver` installs a callback. It is called synchronously from
- *     inside key handling, so it must be cheap and must not call back into
- *     librime's mutating entry points (process_key, highlight, select,
- *     set_option, set_property, apply_schema); reading the candidate list with
- *     candidate_list_from_index / candidate_list_next is fine, including
- *     materializing the candidates it needs.
- *   - `set_page` reports the page currently on screen after a render. It is
- *     only used while the highlighted candidate lies inside the reported range,
- *     so a stale report is ignored rather than obeyed.
+ *   - Pages are not pushed in. The host owns the layout, so it holds the answer
+ *     already; a copy of it inside the module would be a second source of truth
+ *     to keep valid across rendering, filters and re-segmentation.
+ *   - Page turns are not delegated. A host-driven turn is the host moving its
+ *     own highlight with rime->highlight_candidate, which takes an absolute
+ *     index and needs no help from here.
+ *   - There is no index-to-page query. A host that computes pages can answer
+ *     that question itself.
  *
- * A page must contain the index it is asked about, and pages should tile the
- * candidate list (each page starting where the previous one ended); the module
- * relies on that tiling to treat the end of a page as the start of the next.
+ * What the module does not do is notice a highlight the host moved by itself:
+ * see the note on the "paging" tag below.
+ *
+ * The resolver is called synchronously from inside key handling, so it must be
+ * cheap and must not call back into librime's mutating entry points
+ * (process_key, highlight, select, set_option, set_property, apply_schema);
+ * reading the candidate list with candidate_list_from_index / candidate_list_next
+ * is fine, including materializing the candidates it needs. Whether it
+ * precomputes layout or computes on demand is the host's choice.
  *
  * The module asks rarely. Moving the highlight by one candidate never consults
  * the resolver, and neither do home and end. A page turn resolves the page the
- * highlight is on and the page being turned to, so it costs one call when the
- * host has reported the current page as it renders - the recommended flow - and
- * two on a cold cache, such as the first page key after a retranslation.
+ * highlight is on and the page being turned to, so it costs two calls; a select
+ * key costs one.
  *
- * One model serves a whole keystroke: either both ends of the turn come from
- * the resolver, or the built-in menu/page_size arithmetic does. When a host
- * cannot place the page being turned to, that keystroke falls back; a host
- * should therefore answer for every page it has laid out, not only the visible
- * one.
- *
- * The module publishes the geometry it is using as session properties, so hosts
- * and Lua scripts read the same answer:
+ * The module publishes the highlight as a session property, so a host and any
+ * Lua script read the same answer:
  *
  *   varpage.index   absolute index of the highlighted candidate
- *   varpage.start   first candidate of the page the highlight is on
- *   varpage.length  how many candidates that page holds
- *   varpage.source  "client" (host-reported) | "fallback" (built-in page) |
- *                   "stale"  (the highlight left the reported page; start and
- *                            length are the last published values)
+ *   varpage.source  "client" when the host's pages determined the most recent
+ *                   page move, "fallback" when the built-in page_size
+ *                   arithmetic did
  *
- * Publishing is active per session, from the first set_resolver or set_page
- * call: a session that never registered sees no property traffic at all.
+ * Both are cleared when the composition ends. Publishing starts with the
+ * registration, so a session that never registers sees no property traffic.
  *
  * Note that writing a property calls the host's notification handler
  * synchronously, from inside key handling, and that handler runs while librime
  * holds its service lock: it must not call back into librime at all, not even
- * set_page or set_resolver (that self-deadlocks), and not process_key.
+ * set_resolver (that self-deadlocks), and not process_key.
  *
  * Indices are absolute throughout, and that is what the host should use for
  * highlighting and selecting too: rime->highlight_candidate and
  * rime->select_candidate take absolute indices and stay correct here, while
  * rime->change_page and the *_on_current_page functions are hard-wired to the
- * built-in page_size arithmetic and must not be used with this module - use
- * turn_page for a page turn driven by the UI, so it goes through the same code
- * path as a page key and carries the same "paging" tag.
+ * built-in page_size arithmetic and must not be used with this module.
+ *
+ * One consequence of that, worth knowing before relying on it: the segment's
+ * "paging" tag, which is what makes key_binder's `when: paging` bindings fire,
+ * is set by moves the module makes - the page keys and the candidate keys. A
+ * move the host makes itself, with highlight_candidate, does not set it, and
+ * neither did the built-in selector's candidate moves. So a configuration that
+ * expects `-` and `,` to turn pages is driven by the keyboard; a host that moves
+ * the highlight from its own UI should treat those keys as input. (The C API's
+ * change_page does set the tag, so a host migrating off it is moving away from
+ * that behaviour rather than onto it.)
  *
  * Lifecycle: call clear_resolver before destroying the session. Without it a
  * registration outlives its session, and a later session whose context lands on
@@ -118,11 +124,10 @@ typedef struct rime_varpage_page {
 
 // Resolve the page holding the candidate at absolute index `index`.
 //
-// Called synchronously from inside key handling, and also by query_page. Only
-// ever called for indices known to hold a candidate. Return true and fill
-// `page`, or return false to say "unknown" - the module then uses the built-in
-// page_size arithmetic for that keystroke. `user_data` is what was passed to
-// set_resolver.
+// Called synchronously from inside key handling. Only ever called for indices
+// known to hold a candidate. Return true and fill `page`, or return false to say
+// "unknown" - the module then uses the built-in page_size arithmetic for that
+// keystroke. `user_data` is what was passed to set_resolver.
 //
 // The returned page must contain `index`, and pages must tile the candidate
 // list: the page after a given one begins where that one ends. Page Down relies
@@ -143,33 +148,17 @@ typedef bool (*RimeVarPageResolver)(void* user_data,
 typedef struct rime_varpage_api_t {
   int data_size;
 
-  // Install (or replace) the resolver for a session. Registration is what
-  // turns the module on for that session. Returns false if the session has no
-  // context yet, or if `resolver` is null.
+  // Install (or replace) the resolver for a session. Registration is what turns
+  // the module on for that session. Returns false if the session has no context
+  // yet, or if `resolver` is null.
   bool (*set_resolver)(RimeSessionId session_id,
                        RimeVarPageResolver resolver,
                        void* user_data);
 
-  // Unregister a session's resolver and forget its reported page. Works after
-  // the session is gone, so it is safe to call from a session-destroyed
-  // callback. Returns false if the session had no registration.
+  // Unregister a session's resolver. Works after the session is gone, so it is
+  // safe to call from a session-destroyed callback. Returns false if the session
+  // had no registration.
   bool (*clear_resolver)(RimeSessionId session_id);
-
-  // Report the page currently on screen for the highlighted candidate, after a
-  // render. Also enables property publishing for a session that uses no
-  // resolver (push-only mode). Returns false if `length` is zero or the session
-  // has no candidate list.
-  bool (*set_page)(RimeSessionId session_id, size_t start, size_t length);
-
-  // Turn the page the way the page keys do, including page_down_cycle and the
-  // "paging" tag. Returns true if the keystroke would have been consumed; the
-  // resulting position is in the varpage.* properties.
-  bool (*turn_page)(RimeSessionId session_id, bool backward);
-
-  // Page holding `index`, resolved the same way key handling resolves it (that
-  // is, the resolver may be called). Useful for laying out a render before any
-  // key has arrived.
-  bool (*query_page)(RimeSessionId session_id, size_t index, RimeVarPage* out);
 } RimeVarPageApi;
 
 #ifdef __cplusplus

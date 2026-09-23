@@ -301,10 +301,16 @@ where the page boundaries are instead of deriving them
 
 RimeModule* module = rime->find_module("varpage");
 RimeVarPageApi* varpage = (RimeVarPageApi*)module->get_api();
-varpage->set_resolver(session, my_resolver, my_context);  // answer when asked
-// or, after each render:
-varpage->set_page(session, page_start, page_length);      // report what is on screen
+varpage->set_resolver(session, my_resolver, my_context);
+varpage->clear_resolver(session);   // before destroying the session
 ```
+
+The resolver answers one question: which page contains a given candidate index.
+Everything else is either derived from that, or already known to the host, which
+is the side computing the layout. There is deliberately no way to push a page in,
+no delegated page turn, and no index-to-page query — each of those would ask the
+host a question it can answer itself, and the first would put a second copy of
+the layout inside the module to keep valid.
 
 Everything shaped by configuration is kept: the four binding sections
 (`selector`, `selector/vertical`, `selector/linear`, `selector/vertical/linear`)
@@ -317,28 +323,33 @@ arithmetic, so it is a drop-in replacement. There is deliberately no
 configuration switch to turn it off: whether pages vary is a rendering decision,
 so only the renderer makes it.
 
-For a host, four points matter:
+For a host, three points matter:
 
-- **Highlight and select by absolute index.** `highlight_candidate` and
-  `select_candidate` take absolute indices and stay correct. `change_page` and
-  the `*_on_current_page` functions are hard-wired to the built-in page math and
-  must not be used — call `turn_page` for a UI-driven page turn instead, so it
-  goes through the same path as a page key.
+- **Answer for every page you have laid out, not just the visible one.** A page
+  turn asks about the candidate just past the current page, which may not be on
+  screen yet. Answer "unknown" there and that keystroke falls back to the
+  built-in `page_size` arithmetic, which in a variable-length layout is the wrong
+  page. Answers must also tile — the page after a given one begins where it ends
+  — because the highlight's offset is carried across the turn.
 - **The resolver runs inside key handling.** It must be cheap and must not call
   back into librime's mutating entry points (`process_key`, `highlight`,
   `select`, `set_option`, `set_property`, `apply_schema`). Reading candidates is
   fine, including materializing the ones it needs. Whether it precomputes layout
   or computes on demand is entirely the host's choice; the plugin only promises
-  to ask rarely — not for candidate moves, and at most once per page action.
-- **Re-report after every render.** Indices are not stable identifiers —
-  filters reorder candidates — so a page map keyed on an index goes stale
-  silently. The plugin never trusts a report whose range does not contain the
-  highlighted candidate, and it publishes which source it is using as session
-  properties (`varpage.index`, `.start`, `.length`, `.source`, where `source` is
-  `client`, `fallback`, or `stale`) so the host and any Lua script read the same
-  answer.
-- **Call `clear_resolver` before destroying the session**, so a registration
+  to ask rarely — never for candidate moves, twice per page turn.
+- **Highlight and select by absolute index.** `highlight_candidate` and
+  `select_candidate` take absolute indices and stay correct. `change_page` and
+  the `*_on_current_page` functions are hard-wired to the built-in page math and
+  must not be used. One consequence: the `paging` tag that `when: paging` bindings
+  read is set by the module's own moves, so those bindings follow keyboard page
+  turns; a host moving the highlight from its own UI should treat `-` and `,` as
+  input. Call `clear_resolver` before destroying the session, so a registration
   cannot outlive it.
+
+The highlight is published as session properties — `varpage.index` (absolute
+index, cleared when the composition ends) and `varpage.source` (`client` or
+`fallback`, naming the model behind the most recent page move) — so a host and
+any Lua script read the same answer.
 
 `menu.*` in `get_context` is unaffected and still describes the built-in window;
 it is not the host's page. `menu.page_size` doubles as the fallback page length

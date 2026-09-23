@@ -35,17 +35,14 @@ bool SetResolver(RimeSessionId session_id,
                  RimeVarPageResolver resolver,
                  void* user_data);
 bool ClearResolver(RimeSessionId session_id);
-bool SetClientPage(RimeSessionId session_id, size_t start, size_t length);
-bool TurnPage(RimeSessionId session_id, bool backward);
-bool QueryPage(RimeSessionId session_id, size_t index, PageGeometry* page);
 
-// Action entry points shared by the selector and by turn_page, so both go
-// through the same resolution and tagging.
+// Action entry points, each of which falls back to the built-in page_size
+// arithmetic when the host does not answer.
 bool PreviousPage(Schema* schema, Context* ctx);
 bool NextPage(Schema* schema, Context* ctx);
 bool SelectCandidateAt(Schema* schema, Context* ctx, int slot);
 
-// Keeps the published geometry in step with the context. Connected to the
+// Keeps the published highlight in step with the context. Connected to the
 // context's update and select notifiers; never calls the host.
 void OnContextChanged(Context* ctx);
 

@@ -16,8 +16,14 @@
 // gtest. It therefore links the shipped library from a bare compiler invocation
 // and brings nothing with it.
 //
-// The harness registers a page table nothing like the built-in page_size (3
-// then 4), which is what lets each assertion tell the two models apart.
+// Two things about the shape of these assertions, both learned the hard way:
+//
+//   - Observed behavior, not the plugin's own published values. A check that
+//     reads varpage.* alone can pass on a value written earlier; where a property
+//     is used it is cross-checked against the highlight the engine holds.
+//   - The host page table below is nothing like the built-in page_size (3 then
+//     4), which is what lets a check tell the two models apart: a page key that
+//     lands on 3 went through the host, one that lands on 5 through the built-in.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -57,6 +63,19 @@ bool Resolver(void* user_data,
   return false;
 }
 
+// Answers "unknown" for everything: the path a host takes when it declines a
+// request, which must leave the built-in arithmetic in charge.
+bool UnknownResolver(void* user_data,
+                     RimeSessionId session_id,
+                     size_t index,
+                     RimeVarPage* page) {
+  (void)user_data;
+  (void)session_id;
+  (void)index;
+  (void)page;
+  return false;
+}
+
 // A host whose answers overlap instead of tiling: the page it reports for the
 // index being turned to starts before the page the highlight is on. Every answer
 // contains the index it was asked about, so nothing about a single answer looks
@@ -79,19 +98,6 @@ bool UntiledResolver(void* user_data,
   return true;
 }
 
-// Answers "unknown" for everything: the path a host takes when it declines a
-// request, which must leave the built-in arithmetic in charge.
-bool UnknownResolver(void* user_data,
-                     RimeSessionId session_id,
-                     size_t index,
-                     RimeVarPage* page) {
-  (void)user_data;
-  (void)session_id;
-  (void)index;
-  (void)page;
-  return false;
-}
-
 std::string Property(RimeSessionId session, const char* name) {
   char buffer[64] = {0};
   if (!g_rime->get_property(session, name, buffer, sizeof(buffer)))
@@ -99,9 +105,20 @@ std::string Property(RimeSessionId session, const char* name) {
   return buffer;
 }
 
+// The highlight, from the engine rather than from the plugin: the C API reports
+// it as a page-relative index plus a page number, and the product is the absolute
+// index (that identity holds because both come from the same selected_index).
 int Highlighted(RimeSessionId session) {
-  const std::string value = Property(session, "varpage.index");
-  return value.empty() ? -1 : std::atoi(value.c_str());
+  RimeContext context{};
+  RIME_STRUCT_INIT(RimeContext, context);
+  int index = -1;
+  if (g_rime->get_context(session, &context) &&
+      context.menu.num_candidates > 0) {
+    index = context.menu.page_no * context.menu.page_size +
+            context.menu.highlighted_candidate_index;
+  }
+  g_rime->free_context(&context);
+  return index;
 }
 
 std::string CandidateAt(RimeSessionId session, size_t index) {
@@ -125,13 +142,21 @@ std::string TakeCommit(RimeSessionId session) {
   return text;
 }
 
+int PageSize(RimeSessionId session) {
+  RimeContext context{};
+  RIME_STRUCT_INIT(RimeContext, context);
+  g_rime->get_context(session, &context);
+  const int page_size = context.menu.page_size;
+  g_rime->free_context(&context);
+  return page_size;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 5) {
-    std::printf(
-        "usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys>\n",
-        argv[0]);
+    std::printf("usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys>\n",
+                argv[0]);
     return 2;
   }
   const char* shared_data_dir = argv[1];
@@ -141,20 +166,6 @@ int main(int argc, char** argv) {
   // so it is a parameter rather than a constant: "nihao" means nothing to a
   // shape-based schema.
   const char* input = argv[4];
-
-  RimeApi* rime = rime_get_api();
-  g_rime = rime;
-
-  RimeTraits traits{};
-  RIME_STRUCT_INIT(RimeTraits, traits);
-  const char* modules[] = {"default", "varpage", "deployer", nullptr};
-  traits.modules = modules;
-  traits.shared_data_dir = shared_data_dir;
-  traits.user_data_dir = user_data_dir;
-  traits.distribution_name = "librime-varpage-test";
-  traits.distribution_code_name = "librime-varpage-test";
-  traits.distribution_version = "0";
-  traits.app_name = "librime-varpage-test";
 
   // A selector binding that collides with a select key, deployed as a real user
   // patch so the loader merges it the way it merges a user's own config. Without
@@ -177,6 +188,20 @@ int main(int argc, char** argv) {
     std::fclose(patch);
   }
 
+  RimeApi* rime = rime_get_api();
+  g_rime = rime;
+
+  RimeTraits traits{};
+  RIME_STRUCT_INIT(RimeTraits, traits);
+  const char* modules[] = {"default", "varpage", "deployer", nullptr};
+  traits.modules = modules;
+  traits.shared_data_dir = shared_data_dir;
+  traits.user_data_dir = user_data_dir;
+  traits.distribution_name = "librime-varpage-test";
+  traits.distribution_code_name = "librime-varpage-test";
+  traits.distribution_version = "0";
+  traits.app_name = "librime-varpage-test";
+
   rime->setup(&traits);
   rime->initialize(&traits);
   // A fresh user data dir has no build artifacts, and without them every schema
@@ -197,106 +222,69 @@ int main(int argc, char** argv) {
   Check(session != 0, "session created");
   rime->select_schema(session, schema_id);
 
-  // -- A session with no host: nothing published, built-in behavior. ---------
+  // -- No host at all: the built-in arithmetic, and no property traffic. -----
   Check(Property(session, "varpage.index").empty(),
-        "no property traffic at all before the host registers");
+        "no property traffic before the host registers");
   rime->simulate_key_sequence(session, input);
-
-  RimeContext context{};
-  RIME_STRUCT_INIT(RimeContext, context);
-  rime->get_context(session, &context);
-  const int candidates = context.menu.num_candidates;
-  const int page_size = context.menu.page_size;
-  const bool has_select_keys = context.menu.select_keys != nullptr;
-  rime->free_context(&context);
-  std::printf("      (page_size=%d, candidates on the first page=%d)\n",
-              page_size, candidates);
-  Check(candidates > 0, "candidate list is populated");
-  if (candidates == 0)
-    return 1;
-  (void)has_select_keys;
-
-  // A host that answers "unknown" leaves the built-in arithmetic in charge,
-  // while publishing stays on so the downgrade is visible.
-  Check(varpage->set_resolver(session, &UnknownResolver, nullptr),
-        "a resolver answering unknown is registered");
+  const int page_size = PageSize(session);
+  Check(page_size > 1 && Highlighted(session) == 0,
+        "the composition starts with the highlight on candidate 0");
   Check(rime->process_key(session, 0xFF56 /* XK_Next */, 0),
         "Page_Down is consumed");
   Check(Highlighted(session) == page_size,
-        "an unknown answer falls back to a page_size move");
-  Check(Property(session, "varpage.source") == "fallback",
-        "the published source reports the built-in page");
+        "with no host, Page_Down moves by page_size");
   Check(rime->process_key(session, 0xFF55 /* XK_Prior */, 0),
         "Page_Up is consumed");
   Check(Highlighted(session) == 0, "Page_Up returns to the first candidate");
+  Check(Property(session, "varpage.index").empty(),
+        "still no property traffic: nothing is registered");
+
+  // -- A host that answers "unknown": still built-in, and it says so. --------
+  Check(varpage->set_resolver(session, &UnknownResolver, nullptr),
+        "a resolver answering unknown is registered");
+  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+  Check(Highlighted(session) == page_size,
+        "an unknown answer falls back to a page_size move");
+  Check(Property(session, "varpage.source") == "fallback",
+        "and the source property reports the built-in page");
   Check(varpage->clear_resolver(session), "the unknown resolver is cleared");
 
-  // -- With a host: the same keys follow the host's pages. -------------------
+  // -- A host with pages: the same keys now follow them. --------------------
+  // Start from a fresh composition. The phase above left the highlight wherever
+  // its last page move put it, and a page turn from there is not the move being
+  // asserted here.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(Highlighted(session) == 0, "the composition restarts at the start");
   Check(varpage->set_resolver(session, &Resolver, nullptr),
         "host resolver registered");
-  RimeVarPage page = {0, 0};
-  Check(varpage->query_page(session, 0, &page), "query_page resolves index 0");
-  Check(page.start == 0 && page.length == 3,
-        "the host page for index 0 is [0,3), not the built-in [0,5)");
-
-  rime->process_key(session, 0xFF56, 0);
+  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
   Check(Highlighted(session) == 3,
-        "Page_Down lands on the next host page's first candidate");
-  // The index property is the plugin's own report; this checks it against the
-  // highlight the engine actually has, which the C API exposes as a page-relative
-  // index plus a page number.
-  {
-    RimeContext after_turn{};
-    RIME_STRUCT_INIT(RimeContext, after_turn);
-    rime->get_context(session, &after_turn);
-    const int absolute =
-        after_turn.menu.page_no * after_turn.menu.page_size +
-        after_turn.menu.highlighted_candidate_index;
-    rime->free_context(&after_turn);
-    Check(absolute == 3, "and the engine's own highlight agrees");
-  }
-  Check(Property(session, "varpage.start") == "3" &&
-            Property(session, "varpage.length") == "4",
-        "the published geometry is the host page [3,7)");
-  Check(Property(session, "varpage.source") == "client",
-        "the published source reports the host page");
+        "Page_Down lands on the host's second page, not the built-in fifth");
+  Check(Property(session, "varpage.index") == "3" &&
+            Property(session, "varpage.source") == "client",
+        "and the published highlight and source agree with the engine's move");
+  Check(rime->process_key(session, 0xFF55, 0), "Page_Up is consumed");
+  Check(Highlighted(session) == 0, "Page_Up returns to the host's first page");
 
   // The "paging" tag is what makes key_binder's `when: paging` bindings fire,
   // and losing it is silent. The shipped default.yaml binds `minus` to Page_Up
   // only while paging, so this asserts the tag through a real configuration
   // rather than by introspecting engine state.
   //
-  // Checking the highlight alone would not work: without the tag, `minus`
-  // reaches the punctuator instead, which commits "-" and clears the
-  // composition - and a cleared composition publishes index 0 too, so a naive
-  // check passes either way. What distinguishes them is that a page turn keeps
-  // the candidate list alive and the host page in use, while punctuation
-  // commits text and empties the "composition".
-  Check(rime->process_key(session, 0x2D /* minus */, 0),
-        "minus is consumed");
-  // The three checks below are what make this a test of the tag. The one above
-  // is not: without the tag, `minus` is consumed by the punctuator just the
-  // same, which is exactly why the failure would otherwise go unnoticed.
+  // Checking the highlight alone would not work: without the tag, `minus` reaches
+  // the punctuator instead, which commits "-" and clears the composition - and a
+  // cleared composition also reports index 0, so a naive check passes either way.
+  rime->process_key(session, 0xFF56, 0);
+  Check(Highlighted(session) == 3, "back on the host's second page");
+  Check(rime->process_key(session, 0x2D /* minus */, 0), "minus is consumed");
   Check(TakeCommit(session).empty(),
         "and the paging binding ran, not the punctuator");
-  RimeContext after_minus{};
-  RIME_STRUCT_INIT(RimeContext, after_minus);
-  rime->get_context(session, &after_minus);
-  const bool menu_alive = after_minus.menu.num_candidates > 0;
-  rime->free_context(&after_minus);
-  Check(menu_alive, "the candidate list survived the page turn");
   Check(Property(session, "varpage.source") == "client",
-        "the host page is still in use, so the turn went through it");
+        "the candidate list survived, and the host page is still in use");
   Check(Highlighted(session) == 0, "and it turned the page back");
 
-  Check(varpage->turn_page(session, /*backward=*/false),
-        "turn_page serves a UI-driven page turn");
-  Check(Highlighted(session) == 3, "turn_page moved to the host's second page");
-  Check(varpage->turn_page(session, /*backward=*/true),
-        "turn_page(backward) serves a UI-driven page turn");
-  Check(Highlighted(session) == 0, "turn_page(backward) returns");
-
-  // -- Select keys address slots in the host page. ---------------------------
+  // -- Select keys address slots in the host page. --------------------------
   // Selecting slot 2 commits that candidate. The commit text is the only way to
   // recognise which candidate was taken, and a candidate only commits its own
   // span of the input - so a key sequence whose candidate 2 is not the whole
@@ -305,8 +293,7 @@ int main(int argc, char** argv) {
   const std::string third = CandidateAt(session, 2);
   rime->process_key(session, '3', 0);
   const std::string committed = TakeCommit(session);
-  Check(committed == third,
-        "select key 3 commits candidate 2 ('" + third + "')");
+  Check(committed == third, "select key 3 commits candidate 2 ('" + third + "')");
   if (committed != third) {
     std::printf(
         "      committed '%s'; if this input has no whole-input candidate at\n"
@@ -317,57 +304,37 @@ int main(int argc, char** argv) {
   // Slot 3 is inside the built-in page [0,5) but past the end of the host page
   // [0,3): the key is still consumed, and nothing is selected.
   rime->simulate_key_sequence(session, input);
-  Check(varpage->query_page(session, 0, &page) && page.length == 3,
-        "the host page is [0,3) again after retyping");
   rime->process_key(session, '4', 0);
   Check(TakeCommit(session).empty(),
         "a slot past the end of the host page selects nothing");
+  Check(Highlighted(session) == 0, "the highlight stayed put");
 
-  // A digit the config bound to an action must run that action, not select.
-  // The base class looks the key up in the keymap before it falls through to the
+  // A digit the config bound to an action must run that action, not select. The
+  // base class looks the key up in the keymap before it falls through to the
   // select keys; a replacement that computed the slot first would shadow the
   // binding. The two outcomes are told apart by what happens to the highlight:
-  // the action moves it by one, while the shadowed path resolves a slot and
-  // leaves the selection in a state that resets it.
+  // the action moves it by one, the shadowed path leaves the composition in a
+  // state that resets it.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
-  Check(varpage->query_page(session, 0, &page) && page.length == 3,
-        "the composition is back on the host's first page");
+  Check(Highlighted(session) == 0, "the composition is back at the start");
   rime->process_key(session, '2', 0);
   Check(TakeCommit(session).empty(),
         "a digit bound to next_candidate does not select");
-  Check(Highlighted(session) == 1,
-        "and it moved the highlight instead");
-  Check(varpage->query_page(session, 1, &page) && page.length == 3,
+  Check(Highlighted(session) == 1, "and it moved the highlight instead");
+  Check(!CandidateAt(session, 0).empty(),
         "the composition survived, so the binding ran as an action");
 
-  // -- Push-only mode and the lifecycle call. --------------------------------
-  Check(varpage->clear_resolver(session), "resolver cleared");
-  // A length nothing has published before: the highlight is at 0 here, and the
-  // last geometry published for it was the host's [0,3), so a stale value
-  // cannot satisfy the assertions below.
-  Check(varpage->set_page(session, 0, 4), "a host page is pushed directly");
-  Check(Property(session, "varpage.length") == "4" &&
-            Property(session, "varpage.start") == "0" &&
-            Property(session, "varpage.source") == "client",
-        "the pushed page is published");
-  Check(varpage->query_page(session, (size_t)page_size, &page) &&
-            page.start == (size_t)page_size,
-        "with no resolver, a later index resolves to the built-in page");
-  Check(varpage->set_page(session, 0, 0) == false,
-        "a zero-length page is rejected");
-
-  // A host answer that does not tile - a page containing the probe index but
-  // starting before it - must be declined: carrying the offset into it would
-  // move the highlight backwards. The keystroke falls back instead, and the
-  // published source says so.
+  // -- A host answer that does not tile is declined. ------------------------
+  // The probe is the candidate just past the current page, and the offset is
+  // carried into whatever page comes back. An answer that contains that index but
+  // starts earlier would move the highlight backwards. Move the highlight with
+  // the built-in arithmetic first, so it has somewhere to move back to if the
+  // guard is missing.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
   Check(varpage->set_resolver(session, &UntiledResolver, nullptr),
         "an untiled resolver is registered");
-  // Move the highlight with the built-in arithmetic first, so the turn below has
-  // a non-zero offset to carry and something behind it to move back to. With the
-  // resolver answering as it does, applying that offset would land on index 1.
   rime->process_key(session, 0xFF56, 0);
   const int before_untiled_turn = Highlighted(session);
   Check(before_untiled_turn > 1,
@@ -378,104 +345,87 @@ int main(int argc, char** argv) {
               Property(session, "varpage.source").c_str());
   Check(Highlighted(session) >= before_untiled_turn,
         "the highlight did not move backwards on an untiled answer");
-  // The keystroke has to actually fall back, not merely be consumed: a
-  // do-nothing implementation would satisfy "did not move backwards" too. The
-  // fallback is the built-in move, so the highlight lands a whole page further
-  // on, and the published page is the built-in one that follows.
-  const int expected_fallback = before_untiled_turn + page_size;
-  Check(Highlighted(session) == expected_fallback,
+  // The keystroke has to actually fall back, not merely be consumed: a do-nothing
+  // implementation would satisfy "did not move backwards" too. The fallback is the
+  // built-in move, so the highlight lands a whole page further on.
+  Check(Highlighted(session) == before_untiled_turn + page_size,
         "and it fell back to the built-in page_size move");
-  // The published page is the built-in page containing the position it landed
-  // on, so its start is that position: 5 + 5 = 10 here, aligning to [10,15).
-  Check(Property(session, "varpage.start") == std::to_string(expected_fallback),
-        "with the built-in page published for the position it landed on");
   Check(Property(session, "varpage.source") == "fallback",
         "and the source reports the built-in page was used");
 
-  // A destroyed session must not unregister the session that replaced it. The
-  // allocator can reuse addresses, so this is checked from both sides: the
-  // registration the live session made is what clear_resolver for the dead one
-  // must leave alone.
-  //
-  // Note what is deliberately NOT asserted here. When the allocator hands back
-  // the same addresses, the new session's id is numerically the old one's, and
-  // so is its context - the plugin holds no other identity to tell them apart,
-  // so it cannot detect the swap at all. That is why clear_resolver is a
-  // documented requirement rather than an optimisation, and why this test drives
-  // it rather than pretending the plugin can infer it.
-  {
-    const RimeSessionId first = rime->create_session();
-    rime->select_schema(first, schema_id);
-    rime->simulate_key_sequence(first, input);
-    Check(varpage->set_resolver(first, &Resolver, nullptr),
-          "a session registers under its resolver");
-    RimeVarPage probe_page = {0, 0};
-    Check(varpage->query_page(first, 0, &probe_page) && probe_page.length == 3,
-          "its resolver answers");
-    rime->process_key(first, 0xFF56, 0);
-    Check(Property(first, "varpage.source") == "client",
-          "and its page is published as the host's");
-
-    // A second session registers while the first is still around, so the two
-    // have distinct ids and clearing one cannot be confused with the other.
-    const RimeSessionId second = rime->create_session();
-    rime->select_schema(second, schema_id);
-    rime->simulate_key_sequence(second, input);
-    Check(varpage->set_resolver(second, &Resolver, nullptr),
-          "a second session registers");
-    rime->process_key(second, 0xFF56, 0);
-    Check(Property(second, "varpage.source") == "client",
-          "and it publishes under its own registration");
-
-    Check(varpage->clear_resolver(first),
-          "clearing the first session finds its registration");
-    // Asked of the registry rather than of a property: the property already said
-    // "client" before the clear, so it would still say so if the clear had wiped
-    // everything. The second session's resolver answering is the real evidence.
-    RimeVarPage survivor{0, 0};
-    Check(varpage->query_page(second, 0, &survivor) && survivor.length == 3,
-          "and the second session's registration survived it");
-
-    rime->destroy_session(second);
-    rime->destroy_session(first);
-  }
-
-  // Registering is not invalidated by another engine becoming active for a
-  // while. Opening the schema switcher does exactly that - it makes the session's
-  // active engine the switcher, whose context is a different one - and a
-  // registration keyed on "is the active context the one I was filed under"
-  // would be discarded the first time a user pressed F4, silently and for the
-  // rest of the session. The registration must outlive that.
+  // -- Registration outlives another engine becoming active. ----------------
+  // Opening the schema switcher makes the session's active engine the switcher,
+  // whose context is a different one. A registration keyed on "is the active
+  // context the one I was filed under" would be discarded the first time a user
+  // pressed F4, silently and for the rest of the session.
   {
     const RimeSessionId panel_session = rime->create_session();
     rime->select_schema(panel_session, schema_id);
     rime->simulate_key_sequence(panel_session, input);
     Check(varpage->set_resolver(panel_session, &Resolver, nullptr),
           "a session registers before the switcher opens");
-    // F4 opens the schema switcher in the shipped default.yaml.
     rime->process_key(panel_session, 0xFFC1 /* F4 */, 0);
     rime->clear_composition(panel_session);
     rime->process_key(panel_session, 0xFF1B /* Escape */, 0);
-    // Retype: query_page needs a candidate list to resolve against, and visiting
-    // the panel ends the previous composition.
+    // Retype, then ask for a page: landing on the host's page rather than the
+    // built-in one is what shows the resolver is still consulted.
     rime->simulate_key_sequence(panel_session, input);
-    RimeVarPage after_panel{0, 0};
-    Check(varpage->query_page(panel_session, 0, &after_panel) &&
-              after_panel.length == 3,
-          "and its resolver still answers after the switcher was used");
+    Check(rime->process_key(panel_session, 0xFF56, 0),
+          "Page_Down is consumed after the switcher was used");
+    Check(Highlighted(panel_session) == 3,
+          "and it still followed the host's page");
+    Check(Property(panel_session, "varpage.source") == "client",
+          "with the host's model still reported");
     Check(varpage->clear_resolver(panel_session),
           "the registration is still there to clear");
     rime->destroy_session(panel_session);
   }
 
+  // -- Two sessions do not share a registration. ----------------------------
+  {
+    const RimeSessionId first = rime->create_session();
+    rime->select_schema(first, schema_id);
+    rime->simulate_key_sequence(first, input);
+    Check(varpage->set_resolver(first, &Resolver, nullptr),
+          "a session registers under its resolver");
+
+    const RimeSessionId second = rime->create_session();
+    rime->select_schema(second, schema_id);
+    rime->simulate_key_sequence(second, input);
+    Check(varpage->set_resolver(second, &Resolver, nullptr),
+          "a second session registers");
+
+    Check(varpage->clear_resolver(first),
+          "clearing the first session finds its registration");
+    // Asked of behavior rather than of a property: the property already said
+    // "client" before the clear, so it would still say so if the clear had wiped
+    // everything.
+    Check(rime->process_key(second, 0xFF56, 0) && Highlighted(second) == 3,
+          "and the second session's registration survived it");
+
+    rime->destroy_session(second);
+    rime->destroy_session(first);
+  }
+
+  // -- Properties follow the composition. -----------------------------------
+  rime->clear_composition(session);
+  Check(Property(session, "varpage.index").empty() &&
+            Property(session, "varpage.source").empty(),
+        "ending the composition clears the published highlight and source");
+  rime->simulate_key_sequence(session, input);
+  Check(Property(session, "varpage.index") == "0",
+        "and typing again publishes it");
+
+  // A registration has to stay removable once its session is gone: that is what
+  // keeps a recycled address from inheriting one, and it is why clear_resolver
+  // takes an id rather than a pointer into the session. This session registered
+  // for the host phase above and is destroyed without being cleared, so the
+  // lookup below has only an id to work with.
   rime->destroy_session(session);
-  // A registration has to stay removable once its session is gone - that is what
-  // keeps a recycled address from inheriting one, and it is the reason
-  // clear_resolver takes no Context.
   Check(varpage->clear_resolver(session),
-        "clear_resolver works on a destroyed session");
+        "clear_resolver finds a registration after its session is gone");
   Check(varpage->clear_resolver(session) == false,
-        "a second clear_resolver reports nothing left to remove");
+        "and a second clear reports nothing left");
   rime->finalize();
 
   std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
