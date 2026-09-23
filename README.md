@@ -145,18 +145,20 @@ release builds, so consumers get them without loading anything at runtime:
 - `librime-octagram` (module `octagram`)
 - `librime-predict` (module `predict`)
 
-They also merge one plugin that belongs to this repository rather than upstream:
+They also merge two plugins that belong to this repository rather than upstream:
 
 - `logsink` — forwards librime's diagnostics to host logging systems
   (`plugins/logsink`)
+- `varpage` — variable-length candidate pages driven by the host's layout
+  (`plugins/varpage`)
 
 Plugins live in `plugins/`: the three upstream ones are git submodules pinned to
-explicit commits, and `logsink` is a source directory of this repository (marked
-`"local": true` in the manifest). `plugins.json` is the manifest the build
-reads. `scripts/prepare-plugins.sh` copies each plugin into the upstream source
-tree, applies the per-plugin patches listed in the manifest, and verifies the
-license of every plugin that comes from outside this repository before merging
-it.
+explicit commits, and the local ones are source directories of this repository
+(marked `"local": true` in the manifest). `plugins.json` is the manifest the
+build reads. `scripts/prepare-plugins.sh` copies each plugin into the upstream
+source tree, applies the per-plugin patches listed in the manifest, and verifies
+the license of every plugin that comes from outside this repository before
+merging it.
 
 `librime-lua` does not vendor its own Lua: the interpreter comes from the vcpkg
 `lua` port, and the plugin is patched to use `find_package(Lua)` instead of
@@ -235,6 +237,69 @@ reliable call site is `main()`, because constructor order follows link order, so
 anything logged before that is structurally uncapturable by an in-process sink.
 That window is empty in current librime — its module constructors only register
 and do not log — but it is a property of upstream, not a guarantee of this API.
+
+### Candidate paging: the `varpage` plugin
+
+librime's built-in `selector` assumes a fixed page size (`menu/page_size`):
+Page Up / Page Down move by whole pages of that length, and the select keys pick
+slots relative to a page boundary computed from it. That cannot hold for a
+candidate window laid out against the screen, where how many candidates fit
+depends on how wide they are.
+
+`varpage` replaces the component registered as `selector`, so an existing
+`engine/processors: - selector` entry picks it up unchanged, and asks the host
+where the page boundaries are instead of deriving them
+(`rime_varpage_api.h`, shipped with the public headers):
+
+```c
+#include <rime_api.h>
+#include <rime_varpage_api.h>
+
+RimeModule* module = rime->find_module("varpage");
+RimeVarPageApi* varpage = (RimeVarPageApi*)module->get_api();
+varpage->set_resolver(session, my_resolver, my_context);  // answer when asked
+// or, after each render:
+varpage->set_page(session, page_start, page_length);      // report what is on screen
+```
+
+Everything shaped by configuration is kept: the four binding sections
+(`selector`, `selector/vertical`, `selector/linear`, `selector/vertical/linear`)
+with their defaults and the full action vocabulary,
+`menu/alternative_select_keys` and the digit/keypad fallback,
+`menu/page_down_cycle`, the `_vertical` / `_linear` options, and the segment's
+`paging` tag that enables `key_binder`'s `when: paging` bindings. With no host
+registered, or when the host answers "unknown", it falls back to the built-in
+arithmetic, so it is a drop-in replacement. There is deliberately no
+configuration switch to turn it off: whether pages vary is a rendering decision,
+so only the renderer makes it.
+
+For a host, four points matter:
+
+- **Highlight and select by absolute index.** `highlight_candidate` and
+  `select_candidate` take absolute indices and stay correct. `change_page` and
+  the `*_on_current_page` functions are hard-wired to the built-in page math and
+  must not be used — call `turn_page` for a UI-driven page turn instead, so it
+  goes through the same path as a page key.
+- **The resolver runs inside key handling.** It must be cheap and must not call
+  back into librime's mutating entry points (`process_key`, `highlight`,
+  `select`, `set_option`, `set_property`, `apply_schema`). Reading candidates is
+  fine, including materializing the ones it needs. Whether it precomputes layout
+  or computes on demand is entirely the host's choice; the plugin only promises
+  to ask rarely — not for candidate moves, and at most once per page action.
+- **Re-report after every render.** Indices are not stable identifiers —
+  filters reorder candidates — so a page map keyed on an index goes stale
+  silently. The plugin never trusts a report whose range does not contain the
+  highlighted candidate, and it publishes which source it is using as session
+  properties (`varpage.index`, `.start`, `.length`, `.source`, where `source` is
+  `client`, `fallback`, or `stale`) so the host and any Lua script read the same
+  answer.
+- **Call `clear_resolver` before destroying the session**, so a registration
+  cannot outlive it.
+
+`menu.*` in `get_context` is unaffected and still describes the built-in window;
+it is not the host's page. `menu.page_size` doubles as the fallback page length
+and as the cap on `select_labels`, so a host that wants a full set of labels
+should set it to the largest page it can display.
 
 Two upstream behaviors matter for this arrangement:
 

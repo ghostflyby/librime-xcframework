@@ -38,6 +38,13 @@
       "license": "BSD-3-Clause",
       "license_file": "LICENSE",
       "license_marker": "Redistribution and use in source and binary forms"
+    },
+    {
+      "name": "varpage",
+      "module": "varpage",
+      "path": "plugins/varpage",
+      "local": true,
+      "license": "BSD-3-Clause"
     }
   ]
 }
