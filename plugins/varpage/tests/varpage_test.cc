@@ -1,6 +1,6 @@
 // Behavioral test for the varpage plugin.
 //
-// Driven by scripts/test-varpage.sh against a built librime: this links the
+// Driven by tests/run.sh next to it, against a built librime: this links the
 // dynamic slice and drives real input sessions, which is the only way to cover
 // what the plugin actually changes. The build-time gates (verify_merged_plugins,
 // the header install, the module smoke test) prove the module is present and

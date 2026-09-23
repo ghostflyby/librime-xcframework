@@ -257,10 +257,13 @@ configure_and_install() {
 }
 
 # Builds and runs the two suites against one tree: upstream's own tests, and the
-# behavioral tests in tests/ that drive real input sessions. Both run against
-# the source this script prepared - the same ref, patches and merged plugins the
-# artifacts would come from - which is the whole point: a suite that ran against
-# an unpatched checkout could not report anything about this repository.
+# behavioral tests that each plugin keeps in its own tests/ directory and that
+# drive real input sessions. Both are registered with ctest - upstream's by its
+# own test/CMakeLists.txt, the plugins' by their CMakeLists - so one ctest run
+# covers them and reports them together. They run against the source this script
+# prepared: the same ref, patches and merged plugins the artifacts would come
+# from, which is the whole point, since a suite run against an unpatched checkout
+# could not report anything about this repository.
 run_tests() {
   cmake "${configure_common[@]}" \
     -B "${test_build_dir}" \
@@ -270,18 +273,30 @@ run_tests() {
   cmake --build "${test_build_dir}" --config "${configuration}" \
     --target rime_test
 
-  printf 'running upstream librime tests\n'
-  # ctest rather than invoking the binary directly: it honours the working
-  # directory upstream registers, where the test data files sit. --no-tests=error
-  # because a suite that registers nothing still exits 0 by default, and this
-  # job's exit status is its only signal.
+  # A plugin's test registration is conditional (it needs a test build and a
+  # shared library), and a registration that silently did not happen would leave
+  # ctest reporting a clean run of upstream's suite alone. Check it is there
+  # before trusting that run.
+  #
+  # Captured into a variable rather than piped into `grep -q`: grep exits on the
+  # first match, and under `pipefail` the resulting SIGPIPE on ctest would fail
+  # the check and report a registered test as missing. This is the same trap
+  # verify_merged_plugins documents.
+  printf 'checking the plugin tests registered\n'
+  registered="$(cd "${test_build_dir}" && ctest -N)"
+  if [[ "${registered}" != *varpage_behavioral* ]]; then
+    printf 'the varpage behavioral test is not registered with ctest; it needs BUILD_TEST and BUILD_SHARED_LIBS\n' >&2
+    printf '%s\n' "${registered}" >&2
+    exit 1
+  fi
+
+  printf 'running the test suites\n'
+  # --no-tests=error because a suite that registers nothing still exits 0 by
+  # default, and this job's exit status is its only signal.
   (
     cd "${test_build_dir}"
     ctest --output-on-failure --no-tests=error
   )
-
-  printf 'running the varpage behavioral tests\n'
-  "${script_dir}/test-varpage.sh" --build-dir "${test_build_dir}"
 }
 
 prune_exported_headers() {

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Behavioral test for the varpage plugin: compiles tests/varpage and runs it
+# Behavioral test for the varpage plugin: compiles varpage_test.cc and runs it
 # against a librime that was built with the plugin merged in.
+#
+# Self-locating on purpose - it lives with the plugin it tests and reads
+# everything it needs from this directory, so moving or vendoring the plugin
+# moves its test with it.
 #
 # This is the only test in this repository that drives input sessions, and it
 # exists because the build-time gates cannot cover behavior.
@@ -16,11 +20,11 @@ set -euo pipefail
 # scripts/build-one-arch.sh leaves behind and what CI already has: a
 # <dir>/lib/librime.dylib plus the data files upstream copies into <dir>/bin.
 #
-# usage: test-varpage.sh --build-dir <dir> [--schema <id>] [--input <keys>]
+# usage: plugins/varpage/tests/run.sh --build-dir <dir> [--schema <id>] [--input <keys>]
 
 usage() {
   cat <<'EOF'
-usage: test-varpage.sh --build-dir <dir> [--schema <id>] [--input <keys>]
+usage: run.sh --build-dir <dir> [--schema <id>] [--input <keys>]
 
   --build-dir <dir>  a cmake build tree of librime with varpage merged in:
                      <dir>/lib/librime.dylib and <dir>/bin/*.schema.yaml
@@ -73,7 +77,11 @@ if [[ -z "${build_dir}" ]]; then
   exit 2
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Everything this script reads sits next to it: the test source here, the
+# plugin's public header one level up. No repository root is assumed, so the
+# directory can be used wherever the plugin is.
+test_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+plugin_dir="$(cd "${test_dir}/.." && pwd)"
 
 lib_dir="${build_dir}/lib"
 data_dir="${build_dir}/bin"
@@ -113,7 +121,7 @@ fi
 # that has been installed into carries them in <dir>/include; otherwise they
 # come from the upstream source the build was made from, which its CMakeCache
 # records.
-include_dirs=("-I${repo_root}/plugins/varpage/include")
+include_dirs=("-I${plugin_dir}/include")
 if [[ -f "${build_dir}/include/rime_api.h" ]]; then
   include_dirs+=("-I${build_dir}/include")
 else
@@ -141,7 +149,7 @@ trap 'rm -rf "${work_dir}" "${user_dir}"' EXIT
 printf 'building the test against %s\n' "${lib_dir}/librime.dylib"
 c++ -std=c++17 -O1 -Wall -Wextra \
   -o "${work_dir}/varpage_test" \
-  "${repo_root}/tests/varpage/varpage_test.cc" \
+  "${test_dir}/varpage_test.cc" \
   "${include_dirs[@]}" \
   -L"${lib_dir}" -lrime -Wl,-rpath,"${lib_dir}"
 

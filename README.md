@@ -123,22 +123,25 @@ Run the tests:
 BUILD_TESTS=1 VCPKG_ROOT=/path/to/vcpkg scripts/build-one-arch.sh macos-arm64
 ```
 
-That builds one shared tree and runs both suites against it: upstream librime's
-own `rime_test`, and the behavioral tests in `tests/` that drive real input
-sessions. Both run against the same upstream ref, patches and merged plugins the
-artifacts are built from, which is the point — a suite run against an unpatched
-checkout could not report anything about this repository. The `test` job in
-`build.yml` does the same and gates packaging.
+That builds one shared tree and runs both suites against it, then stops: upstream
+librime's own `rime_test`, and the behavioral tests each plugin keeps in its own
+`tests/` directory that drive real input sessions. Both are registered with
+ctest, so they run and report together. Both run against the same upstream ref,
+patches and merged plugins the artifacts are built from, which is the point — a
+suite run against an unpatched checkout could not report anything about this
+repository. The `test` job in `build.yml` does the same and gates packaging.
 
 The suite needs `gtest`, which is behind `vcpkg.json`'s `tests` feature, so no
 artifact build installs a test framework; `BUILD_TESTS` configures its own tree
 and stops after the tests rather than producing slices. It refuses an iOS slice
 or a non-native architecture, since the test binary has to run on the host.
 
-To run just the behavioral tests against an existing build tree:
+To run just a plugin's behavioral tests against an existing test tree, either
+select it from ctest or call its runner directly:
 
 ```bash
-scripts/test-varpage.sh --build-dir .build/build-macos-arm64-dynamic
+(cd .build/build-macos-arm64-test && ctest -R varpage_behavioral --output-on-failure)
+plugins/varpage/tests/run.sh --build-dir .build/build-macos-arm64-test
 ```
 
 The reasoning behind this split, and what a new test must cover, is in

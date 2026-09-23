@@ -244,7 +244,7 @@ typedef struct rime_varpage_api_t {
 
 **验证**
 
-回归测试在仓库内：`tests/varpage/varpage_test.cc` + `scripts/test-varpage.sh`，对着一棵 `BUILD_SHARED_LIBS=ON` 且合并了本插件的构建树运行真实输入会话。CI 在 `build.yml` 的 `test` job 里跑它（仅 `macos-arm64`，其余四个 slice 是交叉构建，runner 执行不了）。
+回归测试随插件放在一起：`plugins/varpage/tests/varpage_test.cc` + `tests/run.sh`（自定位，不依赖仓库根，插件被搬走或 vendor 出去时测试跟着走），对着一棵 `BUILD_SHARED_LIBS=ON` 且合并了本插件的构建树运行真实输入会话。它以 `add_test` 注册进 ctest（条件为 `BUILD_TEST AND BUILD_SHARED_LIBS`），因此与上游 `rime_test` 同一次 ctest 运行、同一份报告；`run_tests` 在信任该次运行前会先确认注册确实发生（条件注册若静默失效，剩下的就只是上游套件的一份"干净"报告）。注册的是测试**命令**而非 CMake 目标——插件目录由 `add_subdirectory(plugins)` 处理，早于 `add_subdirectory(src)` 创建 rime 目标，在这里定义的可执行文件链接不到它，这也是它测试时才自行编译、而非做成 gtest 二进制的原因。CI 在 `build.yml` 的 `test` job 里跑它（仅 `macos-arm64`，其余四个 slice 是交叉构建，runner 执行不了）。
 
 上游套件与它一起跑，但两者覆盖的东西不同：上游 `rime_test`（90 个用例）验证 patch + 插件没有破坏 librime 本身，而它对 `selector` **零覆盖**——正是本插件改动的部分，所以本插件的断言只能由这里提供。两者由同一条命令驱动：
 
