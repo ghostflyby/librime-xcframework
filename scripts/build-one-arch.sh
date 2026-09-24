@@ -7,51 +7,19 @@ if [[ $# -ne 1 ]]; then
 fi
 
 slice="$1"
+# The slice name is also the prefix of the presets that configure it. What a
+# slice is - its arch, deployment target, triplet and sysroot - is not here but in
+# presets/CMakePresets.json, which is the one place those values live; this only
+# maps the short aliases onto a name and rejects the rest.
 case "${slice}" in
-  arm64|macos-arm64)
-    arch="arm64"
+  arm64)
     platform="macos-arm64"
-    triplet="arm64-osx-static-release"
-    deployment_target="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
-    cmake_system_name=""
-    osx_sysroot=""
-    build_dynamic=1
     ;;
-  x86_64|macos-x86_64)
-    arch="x86_64"
+  x86_64)
     platform="macos-x86_64"
-    triplet="x64-osx-static-release"
-    deployment_target="${MACOSX_DEPLOYMENT_TARGET:-11.0}"
-    cmake_system_name=""
-    osx_sysroot=""
-    build_dynamic=1
     ;;
-  ios-arm64)
-    arch="arm64"
-    platform="ios-arm64"
-    triplet="arm64-ios-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
-    cmake_system_name="iOS"
-    osx_sysroot="iphoneos"
-    build_dynamic=1
-    ;;
-  ios-simulator-arm64)
-    arch="arm64"
-    platform="ios-simulator-arm64"
-    triplet="arm64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
-    cmake_system_name="iOS"
-    osx_sysroot="iphonesimulator"
-    build_dynamic=1
-    ;;
-  ios-simulator-x86_64)
-    arch="x86_64"
-    platform="ios-simulator-x86_64"
-    triplet="x64-ios-simulator-static-release"
-    deployment_target="${IOS_DEPLOYMENT_TARGET:-15.0}"
-    cmake_system_name="iOS"
-    osx_sysroot="iphonesimulator"
-    build_dynamic=1
+  macos-arm64 | macos-x86_64 | ios-arm64 | ios-simulator-arm64 | ios-simulator-x86_64)
+    platform="${slice}"
     ;;
   *)
     printf 'unsupported slice: %s\n' "${slice}" >&2
@@ -78,17 +46,20 @@ case "${build_tests}" in
     ;;
 esac
 if [[ "${build_tests}" -eq 1 ]]; then
-  case "${slice}" in
-    macos-* | arm64 | x86_64) ;;
+  case "${platform}" in
+    macos-*) ;;
     *)
-      printf 'BUILD_TESTS needs a macOS slice: the test binary has to run on this host, and %s builds for %s\n' \
-        "${platform}" "${cmake_system_name:-macOS}" >&2
+      printf 'BUILD_TESTS needs a macOS slice: the test binary has to run on this host, and %s does not build for macOS\n' \
+        "${platform}" >&2
       exit 2
       ;;
   esac
-  if [[ "${arch}" != "$(uname -m)" ]]; then
+  # The slice's architecture is the suffix of its name, which is all this check
+  # needs: whether the binary it would produce can run here.
+  test_arch="${platform#macos-}"
+  if [[ "${test_arch}" != "$(uname -m)" ]]; then
     printf 'BUILD_TESTS builds for %s but this host is %s; the test binary would not run\n' \
-      "${arch}" "$(uname -m)" >&2
+      "${test_arch}" "$(uname -m)" >&2
     exit 2
   fi
 fi
@@ -101,11 +72,27 @@ static_build_dir="${build_dir}-static"
 dynamic_build_dir="${build_dir}-dynamic"
 test_build_dir="${build_dir}-test"
 source_work_dir="${work_dir}/src-${platform}"
-install_dir="${OUT_DIR:-${repo_root}/out}/${platform}"
+install_root="${OUT_DIR:-${repo_root}/out}"
+install_dir="${install_root}/${platform}"
 static_install_dir="${install_dir}/static"
 dynamic_install_dir="${install_dir}/dynamic"
-configuration="${CONFIGURATION:-Release}"
-export VCPKG_OSX_DEPLOYMENT_TARGET="${VCPKG_OSX_DEPLOYMENT_TARGET:-${deployment_target}}"
+
+# The configure arguments live in a preset file, and the presets reach back into
+# this repository through two environment names. CMake reads presets only from the
+# directory it is pointed at with -S, never from a parent of it, so the file is
+# linked into the staged source tree below.
+#
+# Both names are part of what a build tree was configured for, so both are in
+# configure_guard; so is the preset file's contents.
+preset_file="${repo_root}/presets/CMakePresets.json"
+if [[ ! -f "${preset_file}" ]]; then
+  printf 'preset file is missing: %s\n' "${preset_file}" >&2
+  exit 1
+fi
+# What a build tree's configuration depends on, hashed once: see configure_guard.
+preset_digest="$(cksum < "${preset_file}")"
+export WRAPPER_ROOT="${repo_root}"
+export OUT_DIR="${install_root}"
 
 # Work directories are reused rather than recreated.
 #
@@ -147,17 +134,18 @@ mark_fresh() {
   printf '%s\n' "$2" > "$1"
 }
 
-source_dir="${UPSTREAM_SOURCE_DIR:-}"
-if [[ -z "${source_dir}" ]]; then
-  if [[ -d "${repo_root}/vendor/librime" ]]; then
-    source_dir="${repo_root}/vendor/librime"
-  elif [[ -d "${repo_root}/../librime" ]]; then
-    source_dir="${repo_root}/../librime"
-  else
-    printf 'could not find upstream source. Set UPSTREAM_SOURCE_DIR or checkout vendor/librime.\n' >&2
-    exit 1
-  fi
+# Which tree upstream source is taken from (UPSTREAM_SOURCE_DIR, vendor/librime,
+# ../librime) is decided by resolve-version.sh, which also describes a build for
+# the release metadata. Keeping the ladder in one place is what stops a build and
+# its description from disagreeing about which tree they mean. Here it fails
+# rather than falling back: a build with no source must not proceed.
+if ! source_dir="$("${script_dir}/resolve-version.sh" --print-source-dir)"; then
+  printf 'could not find upstream source. Set UPSTREAM_SOURCE_DIR or checkout vendor/librime.\n' >&2
+  exit 1
 fi
+# Exported so that the source.env written below describes the tree this run used
+# by construction, rather than by re-deriving an answer that ought to match.
+export UPSTREAM_SOURCE_DIR="${source_dir}"
 
 # Source selection. With no UPSTREAM_REF the working tree is built, so an
 # in-progress edit under a development checkout is what gets compiled; with an
@@ -207,6 +195,12 @@ done
 # against whatever tree it finds, and an already-patched tree makes an edited
 # patch neither apply nor reverse-apply, so a changed patch would be silently
 # ignored rather than applied.
+#
+# The preset file is deliberately not in it. The symlink below is re-pointed on
+# every run, so a reused tree never carries a stale preset, and putting the file
+# in this guard would re-export and re-patch the whole upstream tree on any edit
+# to it - including a description. What a preset edit must discard is a build
+# tree, and those guards hash the file themselves.
 source_guard="ref=${upstream_ref}"
 while IFS= read -r -d '' patch_file; do
   source_guard+=" patch:$(cksum < "${patch_file}")"
@@ -253,72 +247,64 @@ if [[ ! -f "${source_work_dir}/CMakeLists.txt" ]]; then
   printf 'selected source ref does not contain CMakeLists.txt: %s\n' "${source_work_dir}" >&2
   exit 1
 fi
+
+# CMake discovers presets next to the source it is told to configure and will not
+# look in a parent directory, so the file has to sit in the staged tree. A symlink
+# rather than a copy: the staged tree outlives a run, and a copy would have to be
+# refreshed on every reuse to avoid configuring from a stale preset.
+#
+# A collision is an error rather than a silent overwrite: an upstream that starts
+# shipping a preset file means the packaging layer can no longer tell its own
+# configure matrix from upstream's. CMakeUserPresets.json is checked too - it is
+# read from the same directory, and a duplicate preset name there makes cmake fail
+# in a way this script would report as a preset that would not configure.
+for preset_collision in CMakePresets.json CMakeUserPresets.json; do
+  if [[ -e "${source_work_dir}/${preset_collision}" && ! -L "${source_work_dir}/${preset_collision}" ]]; then
+    printf 'upstream source already contains %s, which this repository also provides: %s\n' \
+      "${preset_collision}" "${source_work_dir}/${preset_collision}" >&2
+    exit 1
+  fi
+done
+ln -sfn "${preset_file}" "${source_work_dir}/CMakePresets.json"
+
 # The tree has been filled, patched and given its plugins, so it now matches the
 # guard written above and the next run may keep it.
 mark_fresh "${stamp_dir}/source-${platform}" "${source_guard}"
 
-configure_common=(
-  -S "${source_work_dir}"
-  -G Ninja
-  -DCMAKE_BUILD_TYPE="${configuration}"
-  -DCMAKE_OSX_ARCHITECTURES="${arch}"
-  -DCMAKE_OSX_DEPLOYMENT_TARGET="${deployment_target}"
-  -DCMAKE_INSTALL_NAME_DIR="@rpath"
-  -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-headerpad_max_install_names"
-  -DCMAKE_TOOLCHAIN_FILE="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
-  -DVCPKG_TARGET_TRIPLET="${triplet}"
-  -DVCPKG_OVERLAY_TRIPLETS="${repo_root}/triplets"
-  -DVCPKG_OVERLAY_PORTS="${repo_root}/ports"
-  -DVCPKG_MANIFEST_DIR="${repo_root}"
-  -DVCPKG_INSTALL_OPTIONS=--allow-unsupported
-  -DBUILD_STATIC=ON
-  -DWITH_STATIC_DEPS=ON
-  -DBUILD_MERGED_PLUGINS=ON
-  -DBUILD_SEPARATE_LIBS=OFF
-  -DBUILD_TOOLS=OFF
-  -DBUILD_SAMPLE=OFF
-  -DENABLE_EXTERNAL_PLUGINS=OFF
-)
-
-# Upstream's test suite is a separate mode rather than a flag on the artifact
-# build, for two reasons: it needs gtest, which comes from the manifest's
-# "tests" feature precisely so artifact builds never install a test framework;
-# and it needs BUILD_SHARED_LIBS, which upstream requires before it will add its
-# test directory at all. Reusing this script is what makes the suite run against
-# the same upstream ref, patches and merged plugins as the artifacts - the point
-# of running it is to catch the packaging layer breaking librime itself, which a
-# separately configured build could not show. The mode, and the guards that keep
-# it to a runnable host, were validated at the top of this script.
-if [[ "${build_tests}" -eq 1 ]]; then
-  configure_common+=(-DBUILD_TEST=ON -DBUILD_TESTING=ON)
-  configure_common+=(-DVCPKG_MANIFEST_FEATURES=tests)
-else
-  configure_common+=(-DBUILD_TEST=OFF -DBUILD_TESTING=OFF)
-fi
-if [[ -n "${cmake_system_name}" ]]; then
-  configure_common+=(-DCMAKE_SYSTEM_NAME="${cmake_system_name}")
-fi
-
-if [[ -n "${osx_sysroot}" ]]; then
-  configure_common+=(-DCMAKE_OSX_SYSROOT="${osx_sysroot}")
-fi
-
 # Identifies what a build directory's CMake cache depends on. The configure
-# arguments are the whole of it: they carry the source path, the arch and
-# deployment target, the triplet, the toolchain and the feature flags. A change to
-# any of them means the cache describes a configuration that is no longer being
-# asked for, so the directory is configured from scratch rather than reused.
+# arguments used to be the whole of it, because they were assembled here; now
+# they live in the preset file, so what a cache depends on is that file's
+# contents, the preset name that selects a leaf of it, and the values the preset
+# reads from the environment.
+#
+# Every $env{...} name the presets reference has to appear below. A value that
+# changes a configuration without being in the guard would leave a build tree
+# configured for the old one and reused for the new one, which is the failure the
+# guard exists to prevent and one nothing else would report.
+#
+# The arguments are the caller's per-directory extras: which leaf is being
+# configured, and anything else that distinguishes two trees made from the same
+# preset.
 configure_guard() {
-  printf '%s\n' "${configure_common[@]}" "$@" | cksum
+  printf '%s\n' \
+    "preset:${preset_digest}" \
+    "wrapper_root=${repo_root}" \
+    "vcpkg_root=${vcpkg_root}" \
+    "out_dir=${install_root}" \
+    "$@" | cksum
 }
 
+# Configures and builds one leaf preset into its own directory.
+#
+# -B is passed even though the presets name a binaryDir: the script needs the path
+# for its stamps and its wipe, so it fixes the location rather than reading it back
+# out of the preset. The two agree because both derive from the preset name.
 configure_and_install() {
-  local output_dir="$1"
-  local prefix="$2"
-  local shared_libs="$3"
+  local preset_name="$1"
+  local output_dir="$2"
 
   local guard
-  guard="$(configure_guard "${prefix}" "-DBUILD_SHARED_LIBS=${shared_libs}")"
+  guard="$(configure_guard "preset_name=${preset_name}" "dir=$(basename "${output_dir}")")"
   local stamp
   stamp="${stamp_dir}/$(basename "${output_dir}")"
   if stale "${stamp}" "${guard}"; then
@@ -326,13 +312,40 @@ configure_and_install() {
   fi
   mkdir -p "${output_dir}"
 
-  cmake "${configure_common[@]}" \
-    -B "${output_dir}" \
-    -DCMAKE_INSTALL_PREFIX="${prefix}" \
-    -DBUILD_SHARED_LIBS="${shared_libs}"
+  cmake -S "${source_work_dir}" --preset "${preset_name}" -B "${output_dir}"
+  # A preset that does not exist, or one whose configuration fails, leaves no
+  # cache behind; without this the later "expected archive was not produced"
+  # would be the report, which names the symptom rather than the preset.
+  if [[ ! -f "${output_dir}/CMakeCache.txt" ]]; then
+    printf 'preset %s did not configure a cache in %s\n' \
+      "${preset_name}" "${output_dir}" >&2
+    exit 1
+  fi
   mark_fresh "${stamp}" "${guard}"
 
-  cmake --build "${output_dir}" --config "${configuration}" --target install
+  cmake --build "${output_dir}" --target install
+}
+
+# The triplet a build tree was configured with, read back from its cache rather
+# than repeated here. Everything after the build - merging the dependency
+# archives, collecting their notices - needs it to find what vcpkg installed.
+# Empty is an error: the archive merge warns rather than fails when it finds no
+# dependency archives, so a silent miss would ship a librime.a without its
+# dependencies and still look like a successful build.
+configured_triplet() {
+  local output_dir="$1"
+  local triplet
+
+  # No `| head -n 1`: under `pipefail` the SIGPIPE on sed when head exits early
+  # would abort the script with no message, which is the opposite of what this
+  # function is for. The cache holds one such line, so the first match is the one.
+  triplet="$(sed -n 's/^VCPKG_TARGET_TRIPLET:[^=]*=//p' "${output_dir}/CMakeCache.txt")"
+  triplet="${triplet%%$'\n'*}"
+  if [[ -z "${triplet}" ]]; then
+    printf 'no VCPKG_TARGET_TRIPLET in the configured cache: %s\n' "${output_dir}/CMakeCache.txt" >&2
+    exit 1
+  fi
+  printf '%s\n' "${triplet}"
 }
 
 # Builds and runs the two suites against one tree: upstream's own tests, and the
@@ -343,10 +356,18 @@ configure_and_install() {
 # prepared: the same ref, patches and merged plugins the artifacts would come
 # from, which is the whole point, since a suite run against an unpatched checkout
 # could not report anything about this repository.
+#
+# A separate preset rather than a flag on the artifact build, for two reasons: it
+# needs gtest, which comes from the manifest's "tests" feature precisely so
+# artifact builds never install a test framework; and it needs BUILD_SHARED_LIBS,
+# which upstream requires before it will add its test directory at all. This is
+# why the artifacts have their own presets with BUILD_TEST off - upstream's
+# default for that option is ON.
 run_tests() {
+  local preset_name="${platform}-test"
+
   local guard
-  guard="$(configure_guard "-DCMAKE_INSTALL_PREFIX=${test_build_dir}/install" \
-    "-DBUILD_SHARED_LIBS=ON")"
+  guard="$(configure_guard "preset_name=${preset_name}" "dir=$(basename "${test_build_dir}")")"
   local stamp
   stamp="${stamp_dir}/$(basename "${test_build_dir}")"
   if stale "${stamp}" "${guard}"; then
@@ -354,14 +375,15 @@ run_tests() {
   fi
   mkdir -p "${test_build_dir}"
 
-  cmake "${configure_common[@]}" \
-    -B "${test_build_dir}" \
-    -DCMAKE_INSTALL_PREFIX="${test_build_dir}/install" \
-    -DBUILD_SHARED_LIBS=ON
+  cmake -S "${source_work_dir}" --preset "${preset_name}" -B "${test_build_dir}"
+  if [[ ! -f "${test_build_dir}/CMakeCache.txt" ]]; then
+    printf 'preset %s did not configure a cache in %s\n' \
+      "${preset_name}" "${test_build_dir}" >&2
+    exit 1
+  fi
   mark_fresh "${stamp}" "${guard}"
 
-  cmake --build "${test_build_dir}" --config "${configuration}" \
-    --target rime_test
+  cmake --build "${test_build_dir}" --target rime_test
 
   # A plugin's test registration is conditional (it needs a test build and a
   # shared library), and a registration that silently did not happen would leave
@@ -603,7 +625,8 @@ fi
 mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
 mark_fresh "${stamp_dir}/install-${platform}" "${install_guard}"
 
-configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
+configure_and_install "${platform}-static" "${static_build_dir}"
+triplet="$(configured_triplet "${static_build_dir}")"
 
 static_archive="${static_install_dir}/lib/librime.a"
 if [[ ! -f "${static_archive}" ]]; then
@@ -620,14 +643,23 @@ for vcpkg_lib_dir in "${static_build_dir}/vcpkg_installed/${triplet}/lib" "${vcp
   fi
 done
 
-if [[ ${#dep_archives[@]} -gt 0 ]]; then
-  merged_archive="${static_install_dir}/lib/librime-merged.a"
-  printf 'merging %d dependency archives into %s\n' "${#dep_archives[@]}" "${static_archive}"
-  libtool -static -o "${merged_archive}" "${static_archive}" "${dep_archives[@]}"
-  mv "${merged_archive}" "${static_archive}"
-else
-  printf 'warning: no vcpkg dependency archives found to merge\n' >&2
+# Fatal rather than a warning. A librime.a without its dependencies is missing
+# every third-party symbol it needs - leveldb, yaml-cpp, glog, opencc - and it
+# still passes verify_merged_plugins, packaging and the release, because those
+# check for plugin module symbols. The only thing that would notice is a consumer's
+# link step, long after the artifact shipped.
+if [[ ${#dep_archives[@]} -eq 0 ]]; then
+  printf 'no vcpkg dependency archives were found for triplet %s; searched:\n' "${triplet}" >&2
+  printf '  %s\n' "${static_build_dir}/vcpkg_installed/${triplet}/lib" >&2
+  printf '  %s\n' "${vcpkg_root}/installed/${triplet}/lib" >&2
+  printf 'a static library without them would be missing every third-party symbol\n' >&2
+  exit 1
 fi
+
+merged_archive="${static_install_dir}/lib/librime-merged.a"
+printf 'merging %d dependency archives into %s\n' "${#dep_archives[@]}" "${static_archive}"
+libtool -static -o "${merged_archive}" "${static_archive}" "${dep_archives[@]}"
+mv "${merged_archive}" "${static_archive}"
 
 install_wrapper_headers "${static_install_dir}/include"
 prune_exported_headers "${static_install_dir}/include"
@@ -666,20 +698,31 @@ verify_merged_plugins() {
 
 verify_merged_plugins "${static_archive}"
 
-if [[ "${build_dynamic}" -eq 1 ]]; then
-  configure_and_install "${dynamic_build_dir}" "${dynamic_install_dir}" ON
+# Every slice ships both a static and a dynamic library; the dynamic one is what
+# RimeDynamic.framework is made from.
+configure_and_install "${platform}-dynamic" "${dynamic_build_dir}"
 
-  dynamic_library="${dynamic_install_dir}/lib/librime.dylib"
-  if [[ ! -f "${dynamic_library}" ]]; then
-    printf 'expected librime dynamic library was not produced: %s\n' "${dynamic_library}" >&2
-    exit 1
-  fi
-
-  install_wrapper_headers "${dynamic_install_dir}/include"
-  prune_exported_headers "${dynamic_install_dir}/include"
-  install_plugin_headers "${dynamic_install_dir}/include"
-  install_wrapper_apinotes "${dynamic_install_dir}/include"
+# Both leaves inherit one slice preset, so they configure the same triplet; the
+# static one's value is used to find what vcpkg installed. Asserted rather than
+# assumed, because a divergence would send the notices and the archive merge
+# looking in the wrong place while everything still built.
+dynamic_triplet="$(configured_triplet "${dynamic_build_dir}")"
+if [[ "${dynamic_triplet}" != "${triplet}" ]]; then
+  printf 'static and dynamic built with different triplets: %s and %s\n' \
+    "${triplet}" "${dynamic_triplet}" >&2
+  exit 1
 fi
+
+dynamic_library="${dynamic_install_dir}/lib/librime.dylib"
+if [[ ! -f "${dynamic_library}" ]]; then
+  printf 'expected librime dynamic library was not produced: %s\n' "${dynamic_library}" >&2
+  exit 1
+fi
+
+install_wrapper_headers "${dynamic_install_dir}/include"
+prune_exported_headers "${dynamic_install_dir}/include"
+install_plugin_headers "${dynamic_install_dir}/include"
+install_wrapper_apinotes "${dynamic_install_dir}/include"
 
 collect_vcpkg_notices "${install_dir}/notices"
 
