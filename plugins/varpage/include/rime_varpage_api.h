@@ -113,15 +113,29 @@
  * engine rather than the switcher, so the panel neither loses your registration
  * nor asks you about its own schema list.
  *
- * There is no cleanup callback, and none is needed for `user_data`: free it
- * whenever you like, including immediately after destroy_session. A resolver
- * call only happens for an index the module is asking about now, and every such
- * call is preceded by the check that the registration's session is still alive
- * - so a pointer belonging to a destroyed session is never passed back. The
- * registration itself ends with its session and needs no attention.
+ * The two halves of a registration are cleaned up differently, and the
+ * difference matters:
  *
- * clear_resolver is therefore optional. It buys the ability to stop being asked
- * during a session's life, and it removes the id-reuse ambiguity below.
+ *   - The registration itself is the module's, and it needs no attention. It
+ * ends with its session, and a later session cannot inherit it.
+ *   - `user_data` is yours. The module stores it, hands it back to the
+ * resolver, and never frees it - a void* carries no deleter, so there is
+ * nothing for the module to call. If you allocated it, releasing it is
+ * required, not optional.
+ *
+ * Its safe window opens when the session ends: either when destroy_session is
+ * called, or when clear_resolver is. From that moment the module will not pass
+ * the pointer back - every resolver call is preceded by the check that the
+ * registration's session is still alive - so you may free it then, and should.
+ * Until then it must stay valid, because the module may still be asking:
+ * freeing before the session ends is a use-after-free.
+ *
+ * So there is no cleanup callback because there is nothing useful for one to
+ * do: the module cannot outlive-inform you of anything you do not already know,
+ * since destroy_session is your own call.
+ *
+ * clear_resolver is otherwise optional. It lets you stop being asked during a
+ * session's life, and it removes the id-reuse ambiguity below.
  *
  * clear_resolver finds a registration by session id, and an id is the session
  * object's address: once a session is gone, its id can come back on a new one
@@ -183,11 +197,11 @@ typedef struct rime_varpage_api_t {
                        RimeVarPageResolver resolver,
                        void* user_data);
 
-  // Unregister a session's resolver. Optional: an unregistered session's
-  // registration is dropped on its own, without any session-destroyed
-  // notification to drive it (librime has none) - see the file comment. Calling
-  // it releases `user_data` at a time you choose and removes the id-reuse
-  // ambiguity the file comment describes.
+  // Stop being asked for this session, without destroying it. The registration
+  // is the module's and would be dropped on its own, so this is for what you
+  // get immediately: from the moment it returns, the resolver is not called
+  // again, and `user_data` may be freed - see the file comment for who owns
+  // what.
   //
   // Works after the session is gone, so it is safe to call from a
   // session-destroyed callback. Returns false if the session had no

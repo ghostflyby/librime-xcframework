@@ -610,6 +610,33 @@ int main(int argc, char** argv) {
           "by now the abandoned entry has been dropped");
   }
 
+  // -- clear_resolver opens the user_data window with the session still up. ---
+  // The other half of the ownership contract: a host that wants to free its
+  // state without destroying the session must be able to, and before this call
+  // that would be a use-after-free because the resolver was still being asked.
+  {
+    HostState host;
+    const RimeSessionId live = rime->create_session();
+    rime->select_schema(live, schema_id);
+    rime->simulate_key_sequence(live, input);
+    Check(varpage->set_resolver(live, &RecordingResolver, &host),
+          "a live session registers with host state");
+    rime->process_key(live, 0xFF56, 0);
+    const int calls_before = host.calls;
+    Check(calls_before > 0, "and the resolver is being asked");
+
+    Check(varpage->clear_resolver(live), "the registration is cleared");
+    // The session is still alive and still usable - it just pages on the
+    // built-in grid now, and must not touch the released state.
+    host.released = true;
+    rime->simulate_key_sequence(live, input);
+    rime->process_key(live, 0xFF56, 0);
+    Check(host.calls_after_release == 0 && host.calls == calls_before,
+          "and it is not asked again, so the window opens with the session "
+          "alive");
+    rime->destroy_session(live);
+  }
+
   // -- Properties follow the composition. -----------------------------------
   rime->clear_composition(session);
   Check(Property(session, "varpage.index").empty() &&
