@@ -69,6 +69,36 @@ bool Resolver(void* user_data,
   return false;
 }
 
+// Records calls through its user_data, so a test can assert that the pointer
+// the host passed in is the one the resolver receives, and that it stops being
+// called once its session is gone.
+struct HostState {
+  bool released = false;
+  int calls = 0;
+  int calls_after_release = 0;
+};
+
+bool RecordingResolver(void* user_data,
+                       RimeSessionId session_id,
+                       size_t index,
+                       RimeVarPage* page) {
+  auto* host = static_cast<HostState*>(user_data);
+  if (host->released) {
+    ++host->calls_after_release;
+    return false;
+  }
+  ++host->calls;
+  (void)session_id;
+  if (index < 3) {
+    page->start = 0;
+    page->length = 3;
+  } else {
+    page->start = 3;
+    page->length = 4;
+  }
+  return true;
+}
+
 // Answers "unknown" for everything: the path a host takes when it declines a
 // request, which must leave the built-in arithmetic in charge.
 bool UnknownResolver(void* user_data,
@@ -537,6 +567,47 @@ int main(int argc, char** argv) {
     Check(varpage->clear_resolver(abandoned) == false,
           "an abandoned registration is gone by the time another session acts");
     rime->destroy_session(survivor);
+  }
+
+  // -- user_data is passed through and never touched after the session. ------
+  // This is what lets a host free its own state as soon as it destroys the
+  // session, with no cleanup callback for the module to invoke: the resolver is
+  // only ever reached through the registration table's liveness check, so a
+  // registration whose session is gone cannot be called. The test marks its
+  // state released and then exercises other sessions, which is when a stale
+  // call would show up.
+  {
+    HostState host;
+    const RimeSessionId owning = rime->create_session();
+    rime->select_schema(owning, schema_id);
+    rime->simulate_key_sequence(owning, input);
+    Check(varpage->set_resolver(owning, &RecordingResolver, &host),
+          "a session registers with host state");
+    rime->process_key(owning, 0xFF56, 0);
+    Check(host.calls > 0 && Highlighted(owning) == 3,
+          "the resolver received the host's own pointer and drove the page");
+    rime->destroy_session(owning);
+
+    // The host may release its state immediately, without waiting for the
+    // module to notice anything. This is the load-bearing part: the
+    // registration is still in the table at this moment, and it is the liveness
+    // check on the way in - not the sweep, which is opportunistic - that keeps
+    // a resolver call from ever reaching this now-freed pointer.
+    host.released = true;
+    for (int i = 0; i < 3; ++i) {
+      const RimeSessionId other = rime->create_session();
+      rime->select_schema(other, schema_id);
+      rime->simulate_key_sequence(other, input);
+      rime->process_key(other, 0xFF56, 0);
+      rime->destroy_session(other);
+    }
+    Check(host.calls_after_release == 0,
+          "no resolver call reached host state released before any sweep");
+
+    // And what the host was holding is still removable, so its own bookkeeping
+    // can be tidied whenever it likes.
+    Check(varpage->clear_resolver(owning) == false,
+          "by now the abandoned entry has been dropped");
   }
 
   // -- Properties follow the composition. -----------------------------------

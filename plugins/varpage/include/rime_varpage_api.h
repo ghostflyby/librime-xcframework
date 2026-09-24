@@ -113,10 +113,15 @@
  * engine rather than the switcher, so the panel neither loses your registration
  * nor asks you about its own schema list.
  *
- * Call clear_resolver before destroying the session. It is not what frees the
- * registration - that ends with the session, and a later session cannot inherit
- * it - but it releases your user_data at a time you choose, and it is the only
- * thing that removes the ambiguity below.
+ * There is no cleanup callback, and none is needed for `user_data`: free it
+ * whenever you like, including immediately after destroy_session. A resolver
+ * call only happens for an index the module is asking about now, and every such
+ * call is preceded by the check that the registration's session is still alive
+ * - so a pointer belonging to a destroyed session is never passed back. The
+ * registration itself ends with its session and needs no attention.
+ *
+ * clear_resolver is therefore optional. It buys the ability to stop being asked
+ * during a session's life, and it removes the id-reuse ambiguity below.
  *
  * clear_resolver finds a registration by session id, and an id is the session
  * object's address: once a session is gone, its id can come back on a new one

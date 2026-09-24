@@ -275,7 +275,7 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 `gtest` 藏在 `vcpkg.json` 的 `tests` feature 后面，且 `BUILD_TESTS` 配置自己的构建树（`.build/build-<platform>-test`）并在测试后停止，因此发布构建既不装测试框架，也不会把 gtest 的版权文件带进 `third-party-notices.zip`。细节与约束记在 `AGENTS.md` 的 Tests 一节。
 
-66 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册；被丢弃的注册无需手动清理。
+70 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册；被丢弃的注册无需手动清理；**`user_data` 可在会话销毁后立即释放**（探针实测释放后 0 次回调，结构上因为每次调用都先过存活检查）。
 
 断言的有效性用反例校准过：去掉 tiling 守卫 → 高亮从 5 退回 1，3 条失败；不写 `paging` 标记 → 3 条失败；按"活跃 context"判定注册失效（切换器回归）→ 3 条失败。
 
