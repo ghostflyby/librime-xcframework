@@ -9,8 +9,6 @@
 #ifndef RIME_VARPAGE_PAGES_H_
 #define RIME_VARPAGE_PAGES_H_
 
-#include <stddef.h>
-
 #include "rime_varpage_api.h"
 
 namespace rime {
@@ -25,7 +23,7 @@ struct PageGeometry {
   size_t length = 0;
 
   size_t end() const { return start + length; }
-  bool Contains(size_t index) const {
+  bool Contains(const size_t index) const {
     return index >= start && index - start < length;
   }
 };
@@ -58,9 +56,12 @@ void UnpublishSwitcherContext(Context* switcher_context);
 // in the first place, so this is a second line of defense rather than the fix -
 // no test isolates it. It is kept because the cost is a flag and the failure it
 // prevents is a host being asked about a menu it never laid out.
-bool PreviousPage(Schema* schema, Context* ctx, bool allow_host);
-bool NextPage(Schema* schema, Context* ctx, bool allow_host);
-bool SelectCandidateAt(Schema* schema, Context* ctx, int slot, bool allow_host);
+bool PreviousPage(const Schema* schema, Context* ctx, bool allow_host);
+bool NextPage(const Schema* schema, Context* ctx, bool allow_host);
+bool SelectCandidateAt(const Schema* schema,
+                       Context* ctx,
+                       int slot,
+                       bool allow_host);
 
 // Keeps the published highlight in step with the context. Connected to the
 // context's update and select notifiers; never calls the host.

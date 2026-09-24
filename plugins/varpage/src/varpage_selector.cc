@@ -8,7 +8,6 @@
 #include <rime/context.h>
 #include <rime/engine.h>
 #include <rime/key_event.h>
-#include <rime/key_table.h>
 #include <rime/schema.h>
 #include <rime/switcher.h>
 
@@ -20,11 +19,11 @@ namespace {
 
 // The two options that pick one of the four keymaps, as in the built-in
 // selector.
-bool IsVerticalText(Context* ctx) {
+bool IsVerticalText(const Context* ctx) {
   return ctx->get_option("_vertical");
 }
 
-bool IsLinearLayout(Context* ctx) {
+bool IsLinearLayout(const Context* ctx) {
   return ctx->get_option("_linear") ||
          // Deprecated. equivalent to {_linear: true, _vertical: false}
          ctx->get_option("_horizontal");

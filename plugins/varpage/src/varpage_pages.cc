@@ -20,11 +20,11 @@ namespace rime::varpage {
 
 namespace {
 
-const char kIndexProperty[] = "varpage.index";
-const char kSourceProperty[] = "varpage.source";
+constexpr char kIndexProperty[] = "varpage.index";
+constexpr char kSourceProperty[] = "varpage.source";
 
-const char kSourceClient[] = "client";
-const char kSourceFallback[] = "fallback";
+constexpr char kSourceClient[] = "client";
+constexpr char kSourceFallback[] = "fallback";
 
 struct Entry {
   RimeSessionId session_id = 0;
@@ -33,14 +33,14 @@ struct Entry {
   // numeric comparison would say "same"; the control block does not. This is
   // what makes a registration left behind by a destroyed session detectable
   // instead of being inherited by its successor.
-  weak<Session> session;
+  std::weak_ptr<Session> session;
   RimeVarPageResolver resolver = nullptr;
   void* user_data = nullptr;
 };
 
 struct Table {
   std::mutex mutex;
-  std::map<Context*, Entry> by_context;
+  std::map<const Context*, Entry> by_context;
   std::map<RimeSessionId, Context*> by_session;
   // Contexts owned by a schema switcher, mapped to the composing engine's
   // context each was opened over. Published and removed by the switcher's own
@@ -51,11 +51,11 @@ struct Table {
 // Deliberately never destroyed: registrations outlive any teardown order the
 // host picks, and a static destructor would only create a race with it.
 Table& table() {
-  static Table* instance = new Table;
+  static auto instance = new Table;
   return *instance;
 }
 
-size_t PageSize(Schema* schema) {
+size_t PageSize(const Schema* schema) {
   const int page_size = schema ? schema->page_size() : 0;
   return page_size > 0 ? static_cast<size_t>(page_size) : 1;
 }
@@ -63,9 +63,10 @@ size_t PageSize(Schema* schema) {
 // The built-in page: `page_size` candidates aligned to a multiple of
 // page_size. The last page is left short rather than clipped, exactly as the
 // built-in selector leaves it, so Highlight and Select clamp as before.
-PageGeometry FixedPage(Schema* schema, size_t index) {
+PageGeometry FixedPage(const Schema* schema, const size_t index) {
   const size_t page_size = PageSize(schema);
-  return PageGeometry{index / page_size * page_size, page_size};
+  return PageGeometry{.start = index / page_size * page_size,
+                      .length = page_size};
 }
 
 // Whether the registration behind `entry` still belongs to a live session.
@@ -77,7 +78,9 @@ bool Live(const Entry& entry) {
 // names this context: an id can have been handed back to a new session whose
 // registration now owns that key, and clearing it would unregister a live
 // session.
-void ForgetSession(Table& t, RimeSessionId session_id, Context* ctx) {
+void ForgetSession(Table& t,
+                   const RimeSessionId session_id,
+                   const Context* ctx) {
   if (const auto session = t.by_session.find(session_id);
       session != t.by_session.end() && session->second == ctx)
     t.by_session.erase(session);
@@ -100,7 +103,7 @@ void DropExpired(Table& t) {
 // Caller holds the lock. Finds the entry for `ctx`, dropping it when its
 // session is gone - the same guard as DropExpired, applied to the one entry a
 // keystroke is asking about.
-Entry* Find(Context* ctx, Table& t) {
+Entry* Find(const Context* ctx, Table& t) {
   const auto it = t.by_context.find(ctx);
   if (it == t.by_context.end())
     return nullptr;
@@ -114,7 +117,7 @@ Entry* Find(Context* ctx, Table& t) {
 
 // Copies the entry for `ctx` out of the table. A copy rather than a reference
 // because the resolver is called with no lock held.
-bool Lookup(Context* ctx, Entry* entry) {
+bool Lookup(const Context* ctx, Entry* entry) {
   Table& t = table();
   std::lock_guard lock(t.mutex);
   const Entry* found = Find(ctx, t);
@@ -124,7 +127,7 @@ bool Lookup(Context* ctx, Entry* entry) {
   return true;
 }
 
-bool Registered(Context* ctx) {
+bool Registered(const Context* ctx) {
   Table& t = table();
   std::lock_guard lock(t.mutex);
   return Find(ctx, t) != nullptr;
@@ -142,9 +145,9 @@ Context* RegistrationContext(Context* ctx) {
 }
 
 void UpsertResolver(Context* ctx,
-                    RimeSessionId session_id,
-                    const an<Session>& session,
-                    RimeVarPageResolver resolver,
+                    const RimeSessionId session_id,
+                    const std::shared_ptr<Session>& session,
+                    const RimeVarPageResolver resolver,
                     void* user_data) {
   Table& t = table();
   std::lock_guard lock(t.mutex);
@@ -210,7 +213,7 @@ void PublishIndex(Context* ctx) {
 // the position the highlight was on - which is the question a host debugging
 // its own layout is asking. Only page actions write the source, so it always
 // names the model behind the most recent page move.
-void PublishDecision(Context* ctx, size_t landed, bool from_host) {
+void PublishDecision(Context* ctx, const size_t landed, const bool from_host) {
   // Nothing is published for a session that never registered: the properties
   // are this module's answer to "what did my resolver decide", and a host that
   // is not asking should not receive them.
@@ -229,7 +232,7 @@ void PublishDecision(Context* ctx, size_t landed, bool from_host) {
 // notifier, which re-runs Compose and can rebuild or empty the composition, so
 // a Segment reference taken before it may be gone by the time it is tagged. The
 // built-in selector tags after moving for the same reason.
-size_t HighlightAndTag(Context* ctx, size_t index) {
+size_t HighlightAndTag(Context* ctx, const size_t index) {
   ctx->Highlight(index);
   Composition& comp = ctx->composition();
   if (comp.empty())
@@ -242,12 +245,12 @@ size_t HighlightAndTag(Context* ctx, size_t index) {
 // candidate at that index; otherwise it always answers, falling back to the
 // built-in page when the host has nothing to say. `from_host` reports which of
 // the two answered.
-bool ResolvePage(Schema* schema,
+bool ResolvePage(const Schema* schema,
                  Context* ctx,
-                 size_t index,
+                 const size_t index,
                  PageGeometry* page,
                  bool* from_host,
-                 bool allow_host) {
+                 const bool allow_host) {
   *from_host = false;
   const Composition& comp = ctx->composition();
   if (comp.empty() || !comp.back().menu)
@@ -296,7 +299,7 @@ void UnpublishSwitcherContext(Context* switcher_context) {
   t.switcher_contexts.erase(switcher_context);
 }
 
-bool NextPage(Schema* schema, Context* ctx, bool allow_host) {
+bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
   const Composition& comp = ctx->composition();
   if (comp.empty() || !comp.back().menu)
     return false;
@@ -353,7 +356,7 @@ bool NextPage(Schema* schema, Context* ctx, bool allow_host) {
   return true;
 }
 
-bool PreviousPage(Schema* schema, Context* ctx, bool allow_host) {
+bool PreviousPage(const Schema* schema, Context* ctx, const bool allow_host) {
   const Composition& comp = ctx->composition();
   if (comp.empty())
     return false;
@@ -394,10 +397,10 @@ bool PreviousPage(Schema* schema, Context* ctx, bool allow_host) {
   return true;
 }
 
-bool SelectCandidateAt(Schema* schema,
+bool SelectCandidateAt(const Schema* schema,
                        Context* ctx,
-                       int slot,
-                       bool allow_host) {
+                       const int slot,
+                       const bool allow_host) {
   const Composition& comp = ctx->composition();
   if (comp.empty() || slot < 0)
     return false;
@@ -423,8 +426,8 @@ void OnContextChanged(Context* ctx) {
   PublishIndex(ctx);
 }
 
-bool SetResolver(RimeSessionId session_id,
-                 RimeVarPageResolver resolver,
+bool SetResolver(const RimeSessionId session_id,
+                 const RimeVarPageResolver resolver,
                  void* user_data) {
   if (!resolver)
     return false;
@@ -439,7 +442,7 @@ bool SetResolver(RimeSessionId session_id,
   return true;
 }
 
-bool ClearResolver(RimeSessionId session_id) {
+bool ClearResolver(const RimeSessionId session_id) {
   Context* ctx = nullptr;
   bool session_alive = false;
   {
@@ -449,8 +452,8 @@ bool ClearResolver(RimeSessionId session_id) {
     if (it == t.by_session.end())
       return false;
     ctx = it->second;
-    const auto entry = t.by_context.find(ctx);
-    if (entry != t.by_context.end()) {
+    if (const auto entry = t.by_context.find(ctx);
+        entry != t.by_context.end()) {
       session_alive = Live(entry->second);
       t.by_context.erase(entry);
     }
@@ -469,11 +472,11 @@ bool ClearResolver(RimeSessionId session_id) {
 }
 
 void Reset() {
-  Table& t = table();
-  std::lock_guard lock(t.mutex);
-  t.by_context.clear();
-  t.by_session.clear();
-  t.switcher_contexts.clear();
+  auto& [mutex, by_context, by_session, switcher_contexts] = table();
+  std::lock_guard lock(mutex);
+  by_context.clear();
+  by_session.clear();
+  switcher_contexts.clear();
 }
 
 }  // namespace rime::varpage
