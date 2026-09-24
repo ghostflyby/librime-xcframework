@@ -11,8 +11,8 @@
  * depends on how wide they are.
  *
  * This module replaces the component registered as "selector", so an existing
- * `engine/processors: - selector` entry picks it up unchanged, and asks the host
- * where the page boundaries are instead of deriving them from page_size.
+ * `engine/processors: - selector` entry picks it up unchanged, and asks the
+ * host where the page boundaries are instead of deriving them from page_size.
  * Everything shaped by configuration is kept:
  *
  *   - the four binding sections (selector, selector/vertical, selector/linear,
@@ -36,10 +36,10 @@
  * pages would get a silently misplaced highlight, which is the failure this
  * module exists to prevent.
  *
- * Only one thing is asked of the host: answer, for a candidate index, which page
- * contains it. Everything else the module does with page geometry is derived
- * from that, and everything the host does with pages it already knows - it is
- * the side computing the layout. In particular:
+ * Only one thing is asked of the host: answer, for a candidate index, which
+ * page contains it. Everything else the module does with page geometry is
+ * derived from that, and everything the host does with pages it already knows -
+ * it is the side computing the layout. In particular:
  *
  *   - Pages are not pushed in. The host owns the layout, so it holds the answer
  *     already; a copy of it inside the module would be a second source of truth
@@ -56,9 +56,9 @@
  * The resolver is called synchronously from inside key handling, so it must be
  * cheap and must not call back into librime's mutating entry points
  * (process_key, highlight, select, set_option, set_property, apply_schema);
- * reading the candidate list with candidate_list_from_index / candidate_list_next
- * is fine, including materializing the candidates it needs. Whether it
- * precomputes layout or computes on demand is the host's choice.
+ * reading the candidate list with candidate_list_from_index /
+ * candidate_list_next is fine, including materializing the candidates it needs.
+ * Whether it precomputes layout or computes on demand is the host's choice.
  *
  * The module asks rarely. Moving the highlight by one candidate never consults
  * the resolver, and neither do home and end. A page turn resolves the page the
@@ -92,10 +92,10 @@
  * is set by moves the module makes - the page keys and the candidate keys. A
  * move the host makes itself, with highlight_candidate, does not set it, and
  * neither did the built-in selector's candidate moves. So a configuration that
- * expects `-` and `,` to turn pages is driven by the keyboard; a host that moves
- * the highlight from its own UI should treat those keys as input. (The C API's
- * change_page does set the tag, so a host migrating off it is moving away from
- * that behaviour rather than onto it.)
+ * expects `-` and `,` to turn pages is driven by the keyboard; a host that
+ * moves the highlight from its own UI should treat those keys as input. (The C
+ * API's change_page does set the tag, so a host migrating off it is moving away
+ * from that behaviour rather than onto it.)
  *
  * Registration is against the session, and it stays with the session: changing
  * schema rebuilds the processors but leaves the registration in place, and
@@ -111,8 +111,6 @@
 #define RIME_VARPAGE_API_H_
 
 #include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 
 #include "rime_api.h"  // for RimeCustomApi / RimeModule / RimeSessionId
 
@@ -131,9 +129,9 @@ typedef struct rime_varpage_page {
 // Resolve the page holding the candidate at absolute index `index`.
 //
 // Called synchronously from inside key handling. Only ever called for indices
-// known to hold a candidate. Return true and fill `page`, or return false to say
-// "unknown" - the module then uses the built-in page_size arithmetic for that
-// keystroke. `user_data` is what was passed to set_resolver.
+// known to hold a candidate. Return true and fill `page`, or return false to
+// say "unknown" - the module then uses the built-in page_size arithmetic for
+// that keystroke. `user_data` is what was passed to set_resolver.
 //
 // The returned page must contain `index`, and pages must tile the candidate
 // list: the page after a given one begins where that one ends. Page Down relies
@@ -141,8 +139,8 @@ typedef struct rime_varpage_page {
 // carries the highlight's offset into whatever page comes back - an answer that
 // starts earlier would move the highlight backwards, so such an answer is
 // declined and the built-in arithmetic serves that keystroke instead. (Page Up
-// asks about the candidate just before the current page, which already forces an
-// answer that starts no later than that, so it needs no such check.)
+// asks about the candidate just before the current page, which already forces
+// an answer that starts no later than that, so it needs no such check.)
 //
 // Do not call librime's mutating entry points from here (see the file comment);
 // reading candidates is fine.
@@ -162,8 +160,8 @@ typedef struct rime_varpage_api_t {
                        void* user_data);
 
   // Unregister a session's resolver. Works after the session is gone, so it is
-  // safe to call from a session-destroyed callback. Returns false if the session
-  // had no registration.
+  // safe to call from a session-destroyed callback. Returns false if the
+  // session had no registration.
   bool (*clear_resolver)(RimeSessionId session_id);
 } RimeVarPageApi;
 

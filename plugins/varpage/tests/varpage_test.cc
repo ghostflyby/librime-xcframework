@@ -2,28 +2,30 @@
 //
 // Driven by tests/run.sh next to it, against a built librime: this links the
 // dynamic slice and drives real input sessions, which is the only way to cover
-// what the plugin actually changes. The build-time gates (verify_merged_plugins,
-// the header install, the module smoke test) prove the module is present and
-// well-formed; none of them can tell whether a page key still lands where the
-// host said it should, or whether the "paging" tag survived - and a lost tag is
-// silent, because it only stops key_binder's `when: paging` bindings from
-// firing.
+// what the plugin actually changes. The build-time gates
+// (verify_merged_plugins, the header install, the module smoke test) prove the
+// module is present and well-formed; none of them can tell whether a page key
+// still lands where the host said it should, or whether the "paging" tag
+// survived - and a lost tag is silent, because it only stops key_binder's
+// `when: paging` bindings from firing.
 //
 // Assertions are plain checks rather than a test framework on purpose. Upstream
 // librime's suite cannot host these - it has no coverage of selector at all, so
 // it cannot see any of this - and this test has to be runnable against any tree
-// the artifacts came from, including a dynamic slice whose dependency set has no
-// gtest. It therefore links the shipped library from a bare compiler invocation
-// and brings nothing with it.
+// the artifacts came from, including a dynamic slice whose dependency set has
+// no gtest. It therefore links the shipped library from a bare compiler
+// invocation and brings nothing with it.
 //
 // Two things about the shape of these assertions, both learned the hard way:
 //
 //   - Observed behavior, not the plugin's own published values. A check that
-//     reads varpage.* alone can pass on a value written earlier; where a property
-//     is used it is cross-checked against the highlight the engine holds.
+//     reads varpage.* alone can pass on a value written earlier; where a
+//     property is used it is cross-checked against the highlight the engine
+//     holds.
 //   - The host page table below is nothing like the built-in page_size (3 then
 //     4), which is what lets a check tell the two models apart: a page key that
-//     lands on 3 went through the host, one that lands on 5 through the built-in.
+//     lands on 3 went through the host, one that lands on 5 through the
+//     built-in.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -81,11 +83,11 @@ bool UnknownResolver(void* user_data,
 }
 
 // A host whose answers overlap instead of tiling: the page it reports for the
-// index being turned to starts before the page the highlight is on. Every answer
-// contains the index it was asked about, so nothing about a single answer looks
-// wrong - the defect is only visible when the offset is carried across, which
-// lands the highlight behind where it started. This is the shape the contract's
-// tiling requirement exists to exclude.
+// index being turned to starts before the page the highlight is on. Every
+// answer contains the index it was asked about, so nothing about a single
+// answer looks wrong - the defect is only visible when the offset is carried
+// across, which lands the highlight behind where it started. This is the shape
+// the contract's tiling requirement exists to exclude.
 bool UntiledResolver(void* user_data,
                      RimeSessionId session_id,
                      size_t index,
@@ -110,8 +112,9 @@ std::string Property(RimeSessionId session, const char* name) {
 }
 
 // The highlight, from the engine rather than from the plugin: the C API reports
-// it as a page-relative index plus a page number, and the product is the absolute
-// index (that identity holds because both come from the same selected_index).
+// it as a page-relative index plus a page number, and the product is the
+// absolute index (that identity holds because both come from the same
+// selected_index).
 int Highlighted(RimeSessionId session) {
   RimeContext context{};
   RIME_STRUCT_INIT(RimeContext, context);
@@ -159,8 +162,9 @@ int PageSize(RimeSessionId session) {
 
 int main(int argc, char** argv) {
   if (argc < 5) {
-    std::printf("usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys>\n",
-                argv[0]);
+    std::printf(
+        "usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys>\n",
+        argv[0]);
     return 2;
   }
   const char* shared_data_dir = argv[1];
@@ -172,10 +176,11 @@ int main(int argc, char** argv) {
   const char* input = argv[4];
 
   // A selector binding that collides with a select key, deployed as a real user
-  // patch so the loader merges it the way it merges a user's own config. Without
-  // it there is nothing to prove that a configured binding still wins over the
-  // select keys - which is the order the built-in selector implements, and the
-  // reason the replacement delegates every non-page action to the base class.
+  // patch so the loader merges it the way it merges a user's own config.
+  // Without it there is nothing to prove that a configured binding still wins
+  // over the select keys - which is the order the built-in selector implements,
+  // and the reason the replacement delegates every non-page action to the base
+  // class.
   {
     const std::string patch_path =
         std::string(user_data_dir) + "/default.custom.yaml";
@@ -184,11 +189,12 @@ int main(int argc, char** argv) {
       std::printf("FAIL  cannot write %s\n", patch_path.c_str());
       return 1;
     }
-    std::fputs("patch:\n"
-               "  selector:\n"
-               "    bindings:\n"
-               "      \"2\": next_candidate\n",
-               patch);
+    std::fputs(
+        "patch:\n"
+        "  selector:\n"
+        "    bindings:\n"
+        "      \"2\": next_candidate\n",
+        patch);
     std::fclose(patch);
   }
 
@@ -276,9 +282,10 @@ int main(int argc, char** argv) {
   // only while paging, so this asserts the tag through a real configuration
   // rather than by introspecting engine state.
   //
-  // Checking the highlight alone would not work: without the tag, `minus` reaches
-  // the punctuator instead, which commits "-" and clears the composition - and a
-  // cleared composition also reports index 0, so a naive check passes either way.
+  // Checking the highlight alone would not work: without the tag, `minus`
+  // reaches the punctuator instead, which commits "-" and clears the
+  // composition - and a cleared composition also reports index 0, so a naive
+  // check passes either way.
   rime->process_key(session, 0xFF56, 0);
   Check(Highlighted(session) == 3, "back on the host's second page");
   Check(rime->process_key(session, 0x2D /* minus */, 0), "minus is consumed");
@@ -297,7 +304,8 @@ int main(int argc, char** argv) {
   const std::string third = CandidateAt(session, 2);
   rime->process_key(session, '3', 0);
   const std::string committed = TakeCommit(session);
-  Check(committed == third, "select key 3 commits candidate 2 ('" + third + "')");
+  Check(committed == third,
+        "select key 3 commits candidate 2 ('" + third + "')");
   if (committed != third) {
     std::printf(
         "      committed '%s'; if this input has no whole-input candidate at\n"
@@ -331,10 +339,10 @@ int main(int argc, char** argv) {
 
   // -- A host answer that does not tile is declined. ------------------------
   // The probe is the candidate just past the current page, and the offset is
-  // carried into whatever page comes back. An answer that contains that index but
-  // starts earlier would move the highlight backwards. Move the highlight with
-  // the built-in arithmetic first, so it has somewhere to move back to if the
-  // guard is missing.
+  // carried into whatever page comes back. An answer that contains that index
+  // but starts earlier would move the highlight backwards. Move the highlight
+  // with the built-in arithmetic first, so it has somewhere to move back to if
+  // the guard is missing.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
   Check(varpage->set_resolver(session, &UntiledResolver, nullptr),
@@ -349,9 +357,10 @@ int main(int argc, char** argv) {
               Property(session, "varpage.source").c_str());
   Check(Highlighted(session) >= before_untiled_turn,
         "the highlight did not move backwards on an untiled answer");
-  // The keystroke has to actually fall back, not merely be consumed: a do-nothing
-  // implementation would satisfy "did not move backwards" too. The fallback is the
-  // built-in move, so the highlight lands a whole page further on.
+  // The keystroke has to actually fall back, not merely be consumed: a
+  // do-nothing implementation would satisfy "did not move backwards" too. The
+  // fallback is the built-in move, so the highlight lands a whole page further
+  // on.
   Check(Highlighted(session) == before_untiled_turn + page_size,
         "and it fell back to the built-in page_size move");
   Check(Property(session, "varpage.source") == "fallback",
@@ -388,11 +397,11 @@ int main(int argc, char** argv) {
   // -- Registering *while* the panel is open. --------------------------------
   // Session::context() reports the panel's own context while a switcher is
   // active, so a registration made in that window used to be filed where only
-  // panel keys could reach it: set_resolver returned true, the panel then called
-  // the host's resolver for a menu the host never laid out, and the composing
-  // engine silently fell back to fixed pages for the rest of the session. Both
-  // halves are asserted here - the panel must not reach the host, and the
-  // registration must still apply once the panel closes.
+  // panel keys could reach it: set_resolver returned true, the panel then
+  // called the host's resolver for a menu the host never laid out, and the
+  // composing engine silently fell back to fixed pages for the rest of the
+  // session. Both halves are asserted here - the panel must not reach the host,
+  // and the registration must still apply once the panel closes.
   {
     const RimeSessionId panel_registration = rime->create_session();
     rime->select_schema(panel_registration, schema_id);
@@ -401,8 +410,8 @@ int main(int argc, char** argv) {
     Check(varpage->set_resolver(panel_registration, &Resolver, nullptr),
           "a session registers while the panel is open");
     // A page key reaches the panel's own selector instance. It must not reach
-    // the host: the menu it would be answered with is the schema list, which the
-    // host never laid out. What prevents it is the registration being filed
+    // the host: the menu it would be answered with is the schema list, which
+    // the host never laid out. What prevents it is the registration being filed
     // against the composing engine, so there is nothing filed under the panel's
     // context to find.
     rime->process_key(panel_registration, 0xFF56, 0);
@@ -424,8 +433,8 @@ int main(int argc, char** argv) {
 
   // -- A schema switch rebuilds the processors. ------------------------------
   // ApplySchema clears and recreates every processor, so the selector instance
-  // the host registered against does not survive it. The registration must: it is
-  // filed against the session and the engine, both of which do survive.
+  // the host registered against does not survive it. The registration must: it
+  // is filed against the session and the engine, both of which do survive.
   {
     const RimeSessionId switching = rime->create_session();
     rime->select_schema(switching, schema_id);
@@ -460,8 +469,8 @@ int main(int argc, char** argv) {
     Check(varpage->clear_resolver(first),
           "clearing the first session finds its registration");
     // Asked of behavior rather than of a property: the property already said
-    // "client" before the clear, so it would still say so if the clear had wiped
-    // everything.
+    // "client" before the clear, so it would still say so if the clear had
+    // wiped everything.
     Check(rime->process_key(second, 0xFF56, 0) && Highlighted(second) == 3,
           "and the second session's registration survived it");
 

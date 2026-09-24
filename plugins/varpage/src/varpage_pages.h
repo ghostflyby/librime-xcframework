@@ -41,10 +41,11 @@ bool ClearResolver(RimeSessionId session_id);
 // instance a switcher creates, and undone by its destructor.
 //
 // Registration needs this because while the panel is open Session::context()
-// reports the panel's own context: filing the host's resolver there would put it
-// where only panel keys can reach it, and the composing engine would silently
-// fall back to fixed pages for the rest of the session.
-void PublishSwitcherContext(Context* switcher_context, Context* attached_context);
+// reports the panel's own context: filing the host's resolver there would put
+// it where only panel keys can reach it, and the composing engine would
+// silently fall back to fixed pages for the rest of the session.
+void PublishSwitcherContext(Context* switcher_context,
+                            Context* attached_context);
 void UnpublishSwitcherContext(Context* switcher_context);
 
 // Action entry points. `allow_host` is false for the selector instance a schema
@@ -52,17 +53,14 @@ void UnpublishSwitcherContext(Context* switcher_context);
 // asking would hand back geometry for a composition the host does not know
 // about.
 //
-// Filing registrations against the composing engine (see PublishSwitcherContext)
-// is what keeps the panel from having anything to ask in the first place, so this
-// is a second line of defense rather than the fix - no test isolates it. It is
-// kept because the cost is a flag and the failure it prevents is a host being
-// asked about a menu it never laid out.
+// Filing registrations against the composing engine (see
+// PublishSwitcherContext) is what keeps the panel from having anything to ask
+// in the first place, so this is a second line of defense rather than the fix -
+// no test isolates it. It is kept because the cost is a flag and the failure it
+// prevents is a host being asked about a menu it never laid out.
 bool PreviousPage(Schema* schema, Context* ctx, bool allow_host);
 bool NextPage(Schema* schema, Context* ctx, bool allow_host);
-bool SelectCandidateAt(Schema* schema,
-                       Context* ctx,
-                       int slot,
-                       bool allow_host);
+bool SelectCandidateAt(Schema* schema, Context* ctx, int slot, bool allow_host);
 
 // Keeps the published highlight in step with the context. Connected to the
 // context's update and select notifiers; never calls the host.
