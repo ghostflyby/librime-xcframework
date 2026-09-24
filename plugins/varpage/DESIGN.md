@@ -176,7 +176,7 @@ typedef struct rime_varpage_api_t {
 ### 6.4 客户端禁止
 
 16. 不要在 resolver 内调用 `process_key`、`highlight`、`select`、`set_option`、`set_property`、`apply_schema`（第 19 条）。
-17. 不在切换器打开时读写 `varpage.*`：此时活动引擎是 switcher（`service.cc:59-65`，`switcher.cc:247`），读写落在它的上下文。
+17. 面板打开期间**注册**是被支持的（会记到组合引擎上），但**读写 `varpage.*` 仍不安全**：`get_property` 走的是 `active_engine()`（`service.cc:59-65`，`switcher.cc:247`），此时落在面板自己的上下文。要读就等面板关闭。
 18. 不要在 `process_key` 返回前依赖 `varpage.*` 的最终值：插件写 property 会**同步重入**你的通知处理函数（在 librime 持有 service 锁的状态下）。通知处理里不要调用 librime 任何入口。
 19. 不要把 `varpage.*` 当稳定标识用；它描述的是"此刻"。特别地，`varpage.source` 只记录最近一次翻页所依据的模型，不描述当前页。
 20. 若接受"`-` / `,` 这类键在翻页后应转为翻页键"这一行为，请注意它由**键盘**翻页点亮（段上的 `paging` 标记），客户端自己用 `highlight_candidate` 移动高亮不会点亮它——内置 selector 的候选移动同样不点亮。C API 的 `change_page` 会点亮，所以从它迁移过来等于放弃该行为。
@@ -245,6 +245,19 @@ typedef struct rime_varpage_api_t {
 
 收敛后的判据是：**凡是客户端能自己回答的，都不进接口**。插件保留的只有客户端做不到的两件事——在按键路径里询问并决定回退，以及写引擎内部的段标记（那是插件自己移动的结果，自动写入）。
 
+**修掉的两个切换器相关缺陷**（研究阶段实测确认，非读码推断）
+
+面板打开时 `Session::context()` 返回的是**切换器自己的** context（`active_engine()`），而按键走 `engine_->context()`（组合引擎自己的）。由此产生两个 bug：
+
+1. **面板期间注册会丢失。** `set_resolver` 把注册记到面板 context 上，返回 `true`；面板关闭后组合引擎在自己的 context 上找不到，此后整个会话静默回退定长页。
+2. **面板会调用宿主回调。** 那份注册恰好能被面板自己的 selector 实例找到，于是宿主被问了一个它从未排版过的组合（索引来自方案列表）。
+
+修法（不需要 patch 上游）：selector 实例构造时用 `dynamic_cast<Switcher*>(engine_)` 识别自己是否属于切换器（上游自己的惯用法，见 `switch_translator.cc:268`、`schema_list_translator.cc:133`），若是则把自己的 context 与 `switcher->attached_engine()->context()` 登记进一张发布表，析构时撤销；`set_resolver` 命中发布表就改记到组合引擎的 context 上。附加一道结构性门闩：切换器实例的 `allow_host` 为 false，根本不去问宿主。
+
+实测（面板期间注册）：修复前 `set_resolver` 返回 1、面板按键调用宿主 1 次、面板关闭后高亮 5（内置）、`source` 为空；修复后面板调用 0 次、面板关闭后高亮 3（宿主页）、`source=client`。
+
+注意：**结构性门闩并未被测试单独覆盖**——去掉它套件仍全绿，因为改记之后面板的 context 上本来就没有条目可查。它是第二道防线，保留的理由是代价只有一个 bool，而它挡住的失败是"宿主被问了一个它没排版过的菜单"。这一点在本文件和 `varpage_pages.h` 里都写明了，不假装有覆盖。
+
 **未实现（有意）**
 
 - `menu/alternative_select_labels` 不参与：它是渲染侧元数据，`select_labels` 由 C API 按 `page_size` 给出，与本插件的页模型无关（§8 第 2 条）。
@@ -268,8 +281,10 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 测试期间用反例校准过每一条断言的有效性——把修复放回去或删掉，对应断言必须失败。有几条最初是**无效的**，已改写：只断言"`minus` 被消费"证明不了 `paging` 标记存在（没标记时 punctuator 同样消费它并提交 `你-`，且清空 composition 也让索引回到 0）；"高亮未后退"在起点为 0 时恒真。改写后的版本各自验证过：删掉 `paging` 写入 → 提交断言失败；删掉 `next.start == probe` 的 tiling 守卫 → 高亮从 5 退回 1，断言失败。
 
-**已知限制**：若 host 销毁会话却不调用 `clear_resolver`，而分配器把同一地址交还给下一个会话（实测中这是常态而非例外——id 就是会话地址），新会话的 id 与旧的数值相等，插件没有任何别的身份可比对，因而无法识别这次替换，旧的注册（含 host 的 resolver 与 `user_data`）会被新会话沿用。`clear_resolver` 因此是契约要求，不是可选清理。
+**关于会话回收**：条目里存了 `weak_ptr<Session>` 作见证。会话 id 就是会话对象地址，因此被销毁的会话的 id 可能被下一个会话复用、任何数值比较都会说"同一个"；控制块不会，这才是让残留注册**可被识别**而不是被继承的机制。顺带两个好处：按键路径不再调用 `GetSession`（那会 `Activate()` 改动 `last_active_time`、并且无锁读 `sessions_`），以及过期条目会在注册/注销时被扫掉。
 
-**一处曾引入又移除的机制**：曾尝试在注册表里存 `weak<Session>`，用控制块比对来判断"还是不是同一个会话对象"，从而识别回收。该版本的会话回收行为出现变化（同一 create/destroy 循环、注册 resolver 的情况下，回收次数由 9/9 变为 0/9；未深究成因），而它改善的只是一个已由 `clear_resolver` 契约覆盖的边界情况，因此放弃，改用下面这条更简单的判定，并如实记录限制。
+`clear_resolver` 仍按 id 查找，因此在"id 被复用且调用者拿的是旧 id"这一种情况下无法区分——这是 API 形状决定的，头文件里写明。
+
+**一处曾引入又移除、又按新理由重新引入的机制**：`weak_ptr<Session>` 最早用来判断"还是不是同一个会话对象"，当时实测会话回收行为出现变化（同一 create/destroy 循环下回收次数 9/9 → 0/9），我误判为代价而放弃。现在明白那是 `make_shared` 的控制块被 weak 保活导致地址不再复用——**良性副作用**，而且正是"防继承"想要的效果。已重新引入，并在注册/注销时扫掉过期条目以免泄漏钉住一个会话大小的分配。
 
 **注册的失效判定只依据"会话是否还存在"**：不能改用"会话当前的活动 context 是否就是注册时那个"，因为切换器面板打开时活动引擎变成切换器本身，那样判定会在用户每次按 F4 后丢弃注册。这条有测试锁定（`varpage_test.cc` 的 switcher 用例）：把判定改回按活动 context 比较，该用例立即失败。

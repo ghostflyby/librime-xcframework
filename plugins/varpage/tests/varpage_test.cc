@@ -47,12 +47,16 @@ void Check(bool condition, const std::string& what) {
 const size_t kStarts[2] = {0, 3};
 const size_t kLengths[2] = {3, 4};
 
+// Counts calls so a test can assert the host was *not* consulted.
+int resolver_calls = 0;
+
 bool Resolver(void* user_data,
               RimeSessionId session_id,
               size_t index,
               RimeVarPage* page) {
   (void)user_data;
   (void)session_id;
+  ++resolver_calls;
   for (int i = 0; i < 2; ++i) {
     if (index >= kStarts[i] && index < kStarts[i] + kLengths[i]) {
       page->start = kStarts[i];
@@ -379,6 +383,64 @@ int main(int argc, char** argv) {
     Check(varpage->clear_resolver(panel_session),
           "the registration is still there to clear");
     rime->destroy_session(panel_session);
+  }
+
+  // -- Registering *while* the panel is open. --------------------------------
+  // Session::context() reports the panel's own context while a switcher is
+  // active, so a registration made in that window used to be filed where only
+  // panel keys could reach it: set_resolver returned true, the panel then called
+  // the host's resolver for a menu the host never laid out, and the composing
+  // engine silently fell back to fixed pages for the rest of the session. Both
+  // halves are asserted here - the panel must not reach the host, and the
+  // registration must still apply once the panel closes.
+  {
+    const RimeSessionId panel_registration = rime->create_session();
+    rime->select_schema(panel_registration, schema_id);
+    rime->process_key(panel_registration, 0xFFC1 /* F4 */, 0);
+    const int before = resolver_calls;
+    Check(varpage->set_resolver(panel_registration, &Resolver, nullptr),
+          "a session registers while the panel is open");
+    // A page key reaches the panel's own selector instance. It must not reach
+    // the host: the menu it would be answered with is the schema list, which the
+    // host never laid out. What prevents it is the registration being filed
+    // against the composing engine, so there is nothing filed under the panel's
+    // context to find.
+    rime->process_key(panel_registration, 0xFF56, 0);
+    Check(resolver_calls == before,
+          "and the panel does not ask the host about its own menu");
+    rime->process_key(panel_registration, 0xFF1B /* Escape */, 0);
+
+    rime->simulate_key_sequence(panel_registration, input);
+    Check(rime->process_key(panel_registration, 0xFF56, 0),
+          "Page_Down is consumed after the panel closes");
+    Check(Highlighted(panel_registration) == 3,
+          "and the registration filed during the panel still applies");
+    Check(Property(panel_registration, "varpage.source") == "client",
+          "with the host's model reported");
+    Check(varpage->clear_resolver(panel_registration),
+          "the registration is there to clear");
+    rime->destroy_session(panel_registration);
+  }
+
+  // -- A schema switch rebuilds the processors. ------------------------------
+  // ApplySchema clears and recreates every processor, so the selector instance
+  // the host registered against does not survive it. The registration must: it is
+  // filed against the session and the engine, both of which do survive.
+  {
+    const RimeSessionId switching = rime->create_session();
+    rime->select_schema(switching, schema_id);
+    rime->simulate_key_sequence(switching, input);
+    Check(varpage->set_resolver(switching, &Resolver, nullptr),
+          "a session registers");
+    rime->select_schema(switching, schema_id);
+    rime->simulate_key_sequence(switching, input);
+    Check(rime->process_key(switching, 0xFF56, 0),
+          "Page_Down is consumed after a schema switch");
+    Check(Highlighted(switching) == 3,
+          "and the host's pages still apply after the processors were rebuilt");
+    Check(varpage->clear_resolver(switching),
+          "the registration is there to clear");
+    rime->destroy_session(switching);
   }
 
   // -- Two sessions do not share a registration. ----------------------------

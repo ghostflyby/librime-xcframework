@@ -97,6 +97,12 @@
  * change_page does set the tag, so a host migrating off it is moving away from
  * that behaviour rather than onto it.)
  *
+ * Registration is against the session, and it stays with the session: changing
+ * schema rebuilds the processors but leaves the registration in place, and
+ * registering while the schema switcher is open files against the composing
+ * engine rather than the switcher, so the panel neither loses your registration
+ * nor asks you about its own schema list.
+ *
  * Lifecycle: call clear_resolver before destroying the session. Without it a
  * registration outlives its session, and a later session whose context lands on
  * the same address could inherit it.
