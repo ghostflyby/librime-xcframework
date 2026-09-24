@@ -6,39 +6,43 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 mkdir -p "$(dirname "${output_path}")"
 
-source_dir="${UPSTREAM_SOURCE_DIR:-}"
-if [[ -z "${source_dir}" ]]; then
-  if [[ -d "${repo_root}/vendor/librime" ]]; then
-    source_dir="${repo_root}/vendor/librime"
-  elif [[ -d "${repo_root}/../librime" ]]; then
-    source_dir="${repo_root}/../librime"
-  else
-    source_dir=""
+# Which upstream this describes, and which tree it was read from, is
+# resolve-version.sh's answer rather than a second implementation of the same
+# ladder: this script and the build that produced the artifacts have to agree
+# about what was built, and two copies of the rules would be free to drift.
+#
+# A key that is absent is an error. resolve-version.sh always prints all of them,
+# so a miss means the two scripts no longer agree on the names - and a release
+# whose metadata silently recorded nothing for a field would describe an artifact
+# by omission.
+resolve_upstream() {
+  local key="$1" value
+
+  value="$(sed -n "s/^${key}=//p" <<< "${upstream_env}")"
+  if [[ -z "${value}" ]]; then
+    # Set only for a release, so an empty one is a local build rather than a
+    # disagreement between the two scripts.
+    if [[ "${key}" == "PACKAGING_VERSION" ]]; then
+      printf '%s\n' "unknown"
+      return 0
+    fi
+    printf 'resolve-version.sh reported no value for %s\n' "${key}" >&2
+    exit 1
   fi
-fi
+  printf '%s\n' "${value}"
+}
+
+upstream_env="$("${script_dir}/resolve-version.sh" --env)"
 
 json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-upstream_repo="${UPSTREAM_REPO:-rime/librime}"
-upstream_ref="${UPSTREAM_REF:-HEAD}"
-upstream_version="${UPSTREAM_VERSION:-unknown}"
-upstream_commit="${UPSTREAM_COMMIT:-unknown}"
-packaging_version="${PACKAGING_VERSION:-unknown}"
-
-if [[ -d "${source_dir}/.git" ]]; then
-  if git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}" >/dev/null 2>&1; then
-    upstream_commit="$(git -C "${source_dir}" rev-parse "${upstream_ref}^{commit}")"
-  elif git -C "${source_dir}" rev-parse HEAD >/dev/null 2>&1; then
-    upstream_commit="$(git -C "${source_dir}" rev-parse HEAD)"
-  fi
-fi
-
-if [[ "${upstream_version}" == "unknown" && -f "${source_dir}/CMakeLists.txt" ]]; then
-  parsed_version="$(sed -nE 's/^[[:space:]]*set\(rime_version[[:space:]]+([^[:space:]\)]+)\).*/\1/p' "${source_dir}/CMakeLists.txt" | head -n 1)"
-  upstream_version="${parsed_version:-unknown}"
-fi
+upstream_repo="$(resolve_upstream UPSTREAM_REPO)"
+upstream_ref="$(resolve_upstream UPSTREAM_REF)"
+upstream_version="$(resolve_upstream UPSTREAM_VERSION)"
+upstream_commit="$(resolve_upstream UPSTREAM_COMMIT)"
+packaging_version="$(resolve_upstream PACKAGING_VERSION)"
 
 packaging_commit="unknown"
 if git -C "${repo_root}" rev-parse HEAD >/dev/null 2>&1; then

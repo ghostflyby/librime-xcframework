@@ -117,6 +117,37 @@ Package existing slice outputs:
 scripts/package-xcframework.sh
 ```
 
+### Configure arguments
+
+What each slice is configured with lives in `presets/CMakePresets.json`, not in
+the build script: a preset per slice for vcpkg's arch, sysroot and triplet, the
+deployment target and the feature flags, and a leaf under each for the static
+library, the dynamic framework and the test build. The build script links that
+file into the staged upstream tree - CMake reads presets only from the directory
+it is pointed at - and configures through it.
+
+The presets are usable by hand against a staged tree, which is the point of
+keeping them in a file rather than in shell:
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+export WRAPPER_ROOT="$PWD"   # this repository, for triplets/ and ports/
+export OUT_DIR="$PWD/out"
+cd .build/src-macos-arm64
+cmake --preset macos-arm64-static
+```
+
+The presets read those three from the environment, and an unset one expands to an
+empty string rather than failing - so export all three, or the paths in the
+container silently point at the filesystem root.
+
+The deployment targets and build type are part of the presets, so
+`MACOSX_DEPLOYMENT_TARGET`, `IOS_DEPLOYMENT_TARGET`, `VCPKG_OSX_DEPLOYMENT_TARGET`
+and `CONFIGURATION` no longer override them - edit the preset instead. A new
+slice means a new triplet, a new preset for it, and its name in
+`build-one-arch.sh`'s case statement; shipping it also means the matrix in
+`build.yml` and the paths in `package-xcframework.sh`.
+
 Run the tests:
 
 ```bash

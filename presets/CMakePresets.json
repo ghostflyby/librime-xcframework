@@ -1,0 +1,211 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "wrapper",
+      "hidden": true,
+      "description": "Configure matrix shared by every slice. The wrapper's build script symlinks this file into the staged upstream source tree and configures through these presets, so the arguments a slice is built with are readable here rather than assembled in shell.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_NAME_DIR": "@rpath",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-headerpad_max_install_names",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "$env{WRAPPER_ROOT}/triplets",
+        "VCPKG_OVERLAY_PORTS": "$env{WRAPPER_ROOT}/ports",
+        "VCPKG_MANIFEST_DIR": "$env{WRAPPER_ROOT}",
+        "VCPKG_INSTALL_OPTIONS": "--allow-unsupported",
+        "BUILD_STATIC": "ON",
+        "WITH_STATIC_DEPS": "ON",
+        "BUILD_MERGED_PLUGINS": "ON",
+        "BUILD_SEPARATE_LIBS": "OFF",
+        "BUILD_TOOLS": "OFF",
+        "BUILD_SAMPLE": "OFF",
+        "ENABLE_EXTERNAL_PLUGINS": "OFF",
+        "BUILD_TEST": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "slice-macos-arm64",
+      "hidden": true,
+      "inherits": "wrapper",
+      "description": "macOS arm64. The deployment target is held here and read back by the cache variable, so the triplet and librime itself cannot disagree about it.",
+      "environment": {
+        "VCPKG_OSX_DEPLOYMENT_TARGET": "11.0"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "$env{VCPKG_OSX_DEPLOYMENT_TARGET}",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx-static-release"
+      }
+    },
+    {
+      "name": "slice-macos-x86_64",
+      "hidden": true,
+      "inherits": "wrapper",
+      "description": "macOS x86_64.",
+      "environment": {
+        "VCPKG_OSX_DEPLOYMENT_TARGET": "11.0"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "$env{VCPKG_OSX_DEPLOYMENT_TARGET}",
+        "VCPKG_TARGET_TRIPLET": "x64-osx-static-release"
+      }
+    },
+    {
+      "name": "slice-ios-arm64",
+      "hidden": true,
+      "inherits": "wrapper",
+      "description": "iOS device arm64. CMAKE_SYSTEM_NAME and CMAKE_OSX_SYSROOT describe the target to librime's own build; the triplet describes it to vcpkg when it builds the ports. vcpkg's toolchain does not read the triplet's platform variables for the consuming project, so both sides are needed.",
+      "environment": {
+        "VCPKG_OSX_DEPLOYMENT_TARGET": "15.0"
+      },
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "$env{VCPKG_OSX_DEPLOYMENT_TARGET}",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios-static-release"
+      }
+    },
+    {
+      "name": "slice-ios-simulator-arm64",
+      "hidden": true,
+      "inherits": "wrapper",
+      "description": "iOS simulator arm64.",
+      "environment": {
+        "VCPKG_OSX_DEPLOYMENT_TARGET": "15.0"
+      },
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "$env{VCPKG_OSX_DEPLOYMENT_TARGET}",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios-simulator-static-release"
+      }
+    },
+    {
+      "name": "slice-ios-simulator-x86_64",
+      "hidden": true,
+      "inherits": "wrapper",
+      "description": "iOS simulator x86_64.",
+      "environment": {
+        "VCPKG_OSX_DEPLOYMENT_TARGET": "15.0"
+      },
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "$env{VCPKG_OSX_DEPLOYMENT_TARGET}",
+        "VCPKG_TARGET_TRIPLET": "x64-ios-simulator-static-release"
+      }
+    },
+    {
+      "name": "macos-arm64-static",
+      "inherits": "slice-macos-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/macos-arm64/static"
+      }
+    },
+    {
+      "name": "macos-arm64-dynamic",
+      "inherits": "slice-macos-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/macos-arm64/dynamic"
+      }
+    },
+    {
+      "name": "macos-arm64-test",
+      "inherits": "slice-macos-arm64",
+      "description": "Upstream's suite plus the plugins' behavioral tests. Unlike an artifact build it wants gtest, which the manifest's tests feature installs, and a shared library, which upstream requires before it adds its test directory at all. Nothing installs, but the prefix is set so no path in the tree defaults outside it.",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "BUILD_TEST": "ON",
+        "BUILD_TESTING": "ON",
+        "VCPKG_MANIFEST_FEATURES": "tests",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/../build-${presetName}/install"
+      }
+    },
+    {
+      "name": "macos-x86_64-static",
+      "inherits": "slice-macos-x86_64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/macos-x86_64/static"
+      }
+    },
+    {
+      "name": "macos-x86_64-dynamic",
+      "inherits": "slice-macos-x86_64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/macos-x86_64/dynamic"
+      }
+    },
+    {
+      "name": "macos-x86_64-test",
+      "inherits": "slice-macos-x86_64",
+      "description": "Test mode for an Intel host.",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "BUILD_TEST": "ON",
+        "BUILD_TESTING": "ON",
+        "VCPKG_MANIFEST_FEATURES": "tests",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/../build-${presetName}/install"
+      }
+    },
+    {
+      "name": "ios-arm64-static",
+      "inherits": "slice-ios-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-arm64/static"
+      }
+    },
+    {
+      "name": "ios-arm64-dynamic",
+      "inherits": "slice-ios-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-arm64/dynamic"
+      }
+    },
+    {
+      "name": "ios-simulator-arm64-static",
+      "inherits": "slice-ios-simulator-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-simulator-arm64/static"
+      }
+    },
+    {
+      "name": "ios-simulator-arm64-dynamic",
+      "inherits": "slice-ios-simulator-arm64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-simulator-arm64/dynamic"
+      }
+    },
+    {
+      "name": "ios-simulator-x86_64-static",
+      "inherits": "slice-ios-simulator-x86_64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-simulator-x86_64/static"
+      }
+    },
+    {
+      "name": "ios-simulator-x86_64-dynamic",
+      "inherits": "slice-ios-simulator-x86_64",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "ON",
+        "CMAKE_INSTALL_PREFIX": "$env{OUT_DIR}/ios-simulator-x86_64/dynamic"
+      }
+    }
+  ]
+}

@@ -32,6 +32,9 @@ on:
       - "patches/**"
       - "triplets/**"
       - "ports/**"
+      # The configure matrix for every slice. A change here changes what is
+      # built, and nothing else in this list covers it.
+      - "presets/**"
       - "vcpkg.json"
       - "scripts/**"
       # The committed headers are what the package ships, and one of them is a
@@ -62,6 +65,18 @@ jobs:
 
       - name: Verify committed headers
         run: scripts/verify-committed-headers.sh
+
+  # The configure matrix, expanded without a build: the preset file is the only
+  # place it lives, so a flag that stopped being set has nothing else to catch it.
+  presets:
+    name: presets
+    runs-on: macos-15
+    steps:
+      - name: Checkout packaging repository
+        uses: actions/checkout@v7
+
+      - name: Verify presets
+        run: scripts/verify-presets.sh
 
   # Resolved once so this run tests one ref, and so an explicitly dispatched run
   # can pin one. Same resolution as `build.yml`, and the same reason for doing it
