@@ -173,6 +173,12 @@ Outputs are written to `out/` and `dist/`. Each slice also gets a `source.env`
 recording the resolved upstream repo/ref/version/commit, which is what the
 packaging job reads from the downloaded slices.
 
+Work directories under `.build/` are reused between runs, so a rebuild after a
+source edit takes seconds rather than a full compile. Each one records what it was
+created for - the upstream ref and patches for the source tree, the configure
+arguments for a build tree - and is recreated only when that changes. `CLEAN=1`
+discards them first when a tree needs starting over.
+
 With no `UPSTREAM_REF`, the upstream **working tree** is built, so uncommitted
 edits in a development checkout are what gets compiled; `UPSTREAM_REF` builds
 that ref's committed content instead, and an unresolvable ref is an error. A

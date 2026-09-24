@@ -107,6 +107,39 @@ dynamic_install_dir="${install_dir}/dynamic"
 configuration="${CONFIGURATION:-Release}"
 export VCPKG_OSX_DEPLOYMENT_TARGET="${VCPKG_OSX_DEPLOYMENT_TARGET:-${deployment_target}}"
 
+# Work directories are reused rather than recreated.
+#
+# Wiping them unconditionally was pure cost: a CI runner starts from an empty
+# workspace, so there was never anything to delete there, while locally it threw
+# away the compiler's work on every run - the difference between seconds and a
+# full rebuild for a one-file change. The build system already notices an edited
+# source file, so the only thing reuse needs is a guard on what a directory was
+# *created* for. Each directory records that, and is discarded when the guard no
+# longer matches, which is the case the wipe was really there for: a different
+# upstream ref, a different triplet, a different set of configure arguments.
+#
+# CLEAN=1 discards everything first, for when a build has gone strange in a way
+# the guards cannot see.
+clean="${CLEAN:-0}"
+stamp_dir="${work_dir}/stamps"
+mkdir -p "${stamp_dir}"
+
+# Whether the directory behind `stamp` was made for something other than `guard`.
+stale() {
+  local stamp="$1" guard="$2"
+
+  [[ "${clean}" -eq 1 ]] && return 0
+  [[ -f "${stamp}" ]] || return 0
+  [[ "$(cat "${stamp}")" != "${guard}" ]]
+}
+
+# Records that the directory is now in the state `guard` describes. Called after
+# the step that fills it, so an interrupted run leaves the guard absent and the
+# next run starts that directory over rather than trusting it.
+mark_fresh() {
+  printf '%s\n' "$2" > "$1"
+}
+
 source_dir="${UPSTREAM_SOURCE_DIR:-}"
 if [[ -z "${source_dir}" ]]; then
   if [[ -d "${repo_root}/vendor/librime" ]]; then
@@ -156,14 +189,31 @@ for tool in cmake ninja; do
   fi
 done
 
-rm -rf "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${test_build_dir}"
-mkdir -p "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}"
+# The source tree is filled by the export or copy below, so it can be kept as it
+# is unless what it holds would no longer be produced: the ref it was exported
+# from, or the patches applied on top of it. Both fillers keep the rest in step -
+# `rsync --delete` for a working tree, `git archive | tar -x` for an export, and
+# `prepare-plugins.sh` rsyncs the plugin directories every run - so the ref, the
+# patches and the plugins are the whole of what a tree depends on.
+#
+# The patches have to be in the guard, not just the ref: `apply_patches` runs
+# against whatever tree it finds, and an already-patched tree makes an edited
+# patch neither apply nor reverse-apply, so a changed patch would be silently
+# ignored rather than applied.
+source_guard="ref=${upstream_ref}"
+while IFS= read -r -d '' patch_file; do
+  source_guard+=" patch:$(cksum < "${patch_file}")"
+done < <(find "${repo_root}/patches" -name '*.patch' -print0 | sort -z)
+if stale "${stamp_dir}/source-${platform}" "${source_guard}"; then
+  rm -rf "${source_work_dir}"
+fi
+mkdir -p "${source_work_dir}"
 
 # Test mode neither writes nor clears out/<platform>: it produces no artifacts,
 # and a run that removed a slice built earlier would be a surprise for anyone
-# running the two modes back to back.
+# running the two modes back to back. Artifact mode checks the same guard further
+# down, once the configure arguments it depends on exist.
 if [[ "${build_tests}" -eq 0 ]]; then
-  rm -rf "${install_dir}"
   mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
 fi
 
@@ -196,6 +246,9 @@ if [[ ! -f "${source_work_dir}/CMakeLists.txt" ]]; then
   printf 'selected source ref does not contain CMakeLists.txt: %s\n' "${source_work_dir}" >&2
   exit 1
 fi
+# The tree has been filled, patched and given its plugins, so it now matches the
+# guard written above and the next run may keep it.
+mark_fresh "${stamp_dir}/source-${platform}" "${source_guard}"
 
 configure_common=(
   -S "${source_work_dir}"
@@ -243,15 +296,34 @@ if [[ -n "${osx_sysroot}" ]]; then
   configure_common+=(-DCMAKE_OSX_SYSROOT="${osx_sysroot}")
 fi
 
+# Identifies what a build directory's CMake cache depends on. The configure
+# arguments are the whole of it: they carry the source path, the arch and
+# deployment target, the triplet, the toolchain and the feature flags. A change to
+# any of them means the cache describes a configuration that is no longer being
+# asked for, so the directory is configured from scratch rather than reused.
+configure_guard() {
+  printf '%s\n' "${configure_common[@]}" "$@" | cksum
+}
+
 configure_and_install() {
   local output_dir="$1"
   local prefix="$2"
   local shared_libs="$3"
 
+  local guard
+  guard="$(configure_guard "${prefix}" "-DBUILD_SHARED_LIBS=${shared_libs}")"
+  local stamp
+  stamp="${stamp_dir}/$(basename "${output_dir}")"
+  if stale "${stamp}" "${guard}"; then
+    rm -rf "${output_dir}"
+  fi
+  mkdir -p "${output_dir}"
+
   cmake "${configure_common[@]}" \
     -B "${output_dir}" \
     -DCMAKE_INSTALL_PREFIX="${prefix}" \
     -DBUILD_SHARED_LIBS="${shared_libs}"
+  mark_fresh "${stamp}" "${guard}"
 
   cmake --build "${output_dir}" --config "${configuration}" --target install
 }
@@ -265,10 +337,21 @@ configure_and_install() {
 # from, which is the whole point, since a suite run against an unpatched checkout
 # could not report anything about this repository.
 run_tests() {
+  local guard
+  guard="$(configure_guard "-DCMAKE_INSTALL_PREFIX=${test_build_dir}/install" \
+    "-DBUILD_SHARED_LIBS=ON")"
+  local stamp
+  stamp="${stamp_dir}/$(basename "${test_build_dir}")"
+  if stale "${stamp}" "${guard}"; then
+    rm -rf "${test_build_dir}"
+  fi
+  mkdir -p "${test_build_dir}"
+
   cmake "${configure_common[@]}" \
     -B "${test_build_dir}" \
     -DCMAKE_INSTALL_PREFIX="${test_build_dir}/install" \
     -DBUILD_SHARED_LIBS=ON
+  mark_fresh "${stamp}" "${guard}"
 
   cmake --build "${test_build_dir}" --config "${configuration}" \
     --target rime_test
@@ -346,14 +429,35 @@ install_plugin_headers() {
   local include_dir="$1"
   local header header_name destination
 
+  # The collision this guards against is a name clash, and both ways it can happen
+  # are decidable from the sources: a plugin header named like one librime installs
+  # (which would shadow a public header), or two plugins shipping the same name
+  # (the second would silently replace the first).
+  #
+  # Checked against the sources rather than against what is already in the export
+  # directory, because the destination test - "the file exists" - fails the build
+  # on any leftover copy, and a reused out/ directory always has those.
+  local upstream_names plugin_seen=() name
+  upstream_names="$(cd "${source_work_dir}/src" && find . -maxdepth 1 -name '*.h' \
+    -print | sed -n 's|^\./||p' | grep -v '_impl\.h$' || true)"
+
   while IFS= read -r -d '' header; do
     header_name="$(basename "${header}")"
-    destination="${include_dir}/${header_name}"
-    if [[ -e "${destination}" ]]; then
-      printf 'plugin header %s would overwrite an exported header: %s\n' \
-        "${header}" "${destination}" >&2
+    if grep -qxF "${header_name}" <<< "${upstream_names}"; then
+      printf 'plugin header %s would shadow a librime public header of the same name\n' \
+        "${header}" >&2
       exit 1
     fi
+    for name in ${plugin_seen[@]+"${plugin_seen[@]}"}; do
+      if [[ "${name}" == "${header_name}" ]]; then
+        printf 'plugin header %s duplicates a header another plugin already exported\n' \
+          "${header}" >&2
+        exit 1
+      fi
+    done
+    plugin_seen+=("${header_name}")
+
+    destination="${include_dir}/${header_name}"
     cp "${header}" "${destination}"
   done < <(plugin_public_headers)
 }
@@ -383,6 +487,12 @@ collect_vcpkg_notices() {
   local notices_dir="$1"
   local share_dir copyright_file port_name destination
 
+  # Cleared rather than reused, unlike the build and install directories: this
+  # collection is the set of ports currently installed, and the guard on the
+  # install directory keys on the configure arguments rather than on vcpkg.json's
+  # contents. A dependency removed from the manifest would therefore leave its
+  # notice behind, and the bundle would claim a library the artifacts do not
+  # contain. Copying these files again costs nothing.
   rm -rf "${notices_dir}"
   mkdir -p "${notices_dir}/vcpkg" "${notices_dir}/librime"
 
@@ -432,6 +542,18 @@ if [[ "${build_tests}" -eq 1 ]]; then
   printf 'tests passed for %s (source: %s)\n' "${platform}" "${upstream_ref}"
   exit 0
 fi
+
+# out/<platform> is reused for the same reason the build trees are: the install
+# step rewrites what it installs, so clearing first only repeats work. What reuse
+# cannot see is an install *rule* that disappeared, which would leave its file
+# behind - a build-script change rather than a source one, and what CLEAN=1 is
+# for.
+install_guard="$(configure_guard "${platform}" "static+dynamic")"
+if stale "${stamp_dir}/install-${platform}" "${install_guard}"; then
+  rm -rf "${install_dir}"
+fi
+mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
+mark_fresh "${stamp_dir}/install-${platform}" "${install_guard}"
 
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
 
