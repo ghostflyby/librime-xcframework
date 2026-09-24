@@ -231,9 +231,9 @@ typedef struct rime_varpage_api_t {
 2. **`previous_page` 的偏移语义**：实现前先确认了 `Highlight` 会夹取（`context.cc:132-149`），因此上游 compact 写法 `selected < page_size ? 0 : selected - page_size` 与推广式 `prev.start + min(offset, prev.length - 1)` 在等长页下**始终**等价。实现采用推广式。
 3. **`next_page` 的末页判定**：先用 `menu->Prepare(current.end() + 1)` 判断"下一页首个候选是否存在"，只有存在时才向 host 询问下一页几何；不存在时按 `page_down_cycle` 回卷（回卷分支不询问 host，落点用基类语义即"第 0 位"）。
 
-**实现期发现的顺序约束（已修）**
+**实现期发现的顺序约束（现由另一处约束取代）**
 
-`ctx->Highlight()` 会触发 `update_notifier` → 我们的 `OnContextChanged` 会据当前几何发布 property。因此**必须先把新几何存入表、再移动高亮**，否则那次通知会以"高亮已离开旧页、新页又还不知道"的状态发布一次 `stale`。`NextPage` / `PreviousPage` 均已按此顺序书写。
+最初的版本要"先存几何、再移高亮"，因为几何是缓存来的。那个机制已删除（见上），现在没有要预先存的东西；剩下的相邻约束是 `HighlightAndTag`：**标记必须写在移动之后**，因为移动的 notifier 会重跑 `Compose` 并可能重建 composition，移动前取的 `Segment` 引用届时已失效。
 
 **删掉的三个接口（及其理由）**
 
@@ -275,7 +275,7 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 `gtest` 藏在 `vcpkg.json` 的 `tests` feature 后面，且 `BUILD_TESTS` 配置自己的构建树（`.build/build-<platform>-test`）并在测试后停止，因此发布构建既不装测试框架，也不会把 gtest 的版权文件带进 `third-party-notices.zip`。细节与约束记在 `AGENTS.md` 的 Tests 一节。
 
-52 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册。
+64 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册。
 
 断言的有效性用反例校准过：去掉 tiling 守卫 → 高亮从 5 退回 1，3 条失败；不写 `paging` 标记 → 3 条失败；按"活跃 context"判定注册失效（切换器回归）→ 3 条失败。
 

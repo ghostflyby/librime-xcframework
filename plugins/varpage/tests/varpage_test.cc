@@ -149,6 +149,17 @@ std::string TakeCommit(RimeSessionId session) {
   return text;
 }
 
+// The preedit, which is how a selected-but-not-committed candidate shows up.
+std::string Preedit(RimeSessionId session) {
+  RimeContext context{};
+  RIME_STRUCT_INIT(RimeContext, context);
+  std::string text;
+  if (g_rime->get_context(session, &context) && context.composition.preedit)
+    text = context.composition.preedit;
+  g_rime->free_context(&context);
+  return text;
+}
+
 int PageSize(RimeSessionId session) {
   RimeContext context{};
   RIME_STRUCT_INIT(RimeContext, context);
@@ -193,7 +204,8 @@ int main(int argc, char** argv) {
         "patch:\n"
         "  selector:\n"
         "    bindings:\n"
-        "      \"2\": next_candidate\n",
+        "      \"2\": next_candidate\n"
+        "      \"4\": home\n",
         patch);
     std::fclose(patch);
   }
@@ -337,6 +349,24 @@ int main(int argc, char** argv) {
   Check(!CandidateAt(session, 0).empty(),
         "the composition survived, so the binding ran as an action");
 
+  // A bound action that *declines* must fall through to the host's select-key
+  // arithmetic, not the built-in one. "4" is bound to `home`, which declines at
+  // the first candidate, so the key falls through to slot 3 - and slot 3 exists
+  // in the built-in page [0,5) but not in the host's [0,3). Delegating the
+  // whole event to the base class would run the base's own select-key block,
+  // which resolves the slot against page_size and commits candidate 3 instead.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(Highlighted(session) == 0,
+        "at the first candidate for the declining action");
+  const std::string before_declined = Preedit(session);
+  rime->process_key(session, '4', 0);
+  // The preedit is what tells the two outcomes apart, not the commit: selecting
+  // a candidate that spans only part of the input shows up as a change in the
+  // preedit and commits nothing, so an empty commit is true either way.
+  Check(Preedit(session) == before_declined,
+        "a declined binding does not select from the built-in page's slots");
+
   // -- A host answer that does not tile is declined. ------------------------
   // The probe is the candidate just past the current page, and the offset is
   // carried into whatever page comes back. An answer that contains that index
@@ -409,14 +439,16 @@ int main(int argc, char** argv) {
     const int before = resolver_calls;
     Check(varpage->set_resolver(panel_registration, &Resolver, nullptr),
           "a session registers while the panel is open");
-    // A page key reaches the panel's own selector instance. It must not reach
-    // the host: the menu it would be answered with is the schema list, which
-    // the host never laid out. What prevents it is the registration being filed
-    // against the composing engine, so there is nothing filed under the panel's
-    // context to find.
+    // A page key reaches the panel's own selector instance, which must not ask
+    // the host about the schema list - a menu the host never laid out. Two
+    // things prevent it: the registration is filed against the composing
+    // engine, so the panel's context has nothing filed under it, and the
+    // panel's instance declines the host branch outright. This check gates the
+    // combination; the assertions after the panel closes are the ones that
+    // isolate the filing.
     rime->process_key(panel_registration, 0xFF56, 0);
     Check(resolver_calls == before,
-          "and the panel does not ask the host about its own menu");
+          "the panel's own menu never reaches the host's resolver");
     rime->process_key(panel_registration, 0xFF1B /* Escape */, 0);
 
     rime->simulate_key_sequence(panel_registration, input);

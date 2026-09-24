@@ -13,6 +13,15 @@
  * This module replaces the component registered as "selector", so an existing
  * `engine/processors: - selector` entry picks it up unchanged, and asks the
  * host where the page boundaries are instead of deriving them from page_size.
+ *
+ * It takes over whatever is registered as "selector" when its module loads, so
+ * the module has to load after the "default" group (core, dict, gears) - the
+ * default order. A host that lists modules explicitly in RimeTraits::modules
+ * must not put varpage before "default": gears' selector would then be
+ * registered second and win, every answer this module would have asked for
+ * would never be requested, and the host would lay out variable-length pages
+ * for an engine paging on the built-in grid.
+ *
  * Everything shaped by configuration is kept:
  *
  *   - the four binding sections (selector, selector/vertical, selector/linear,
@@ -78,8 +87,9 @@
  *
  * Note that writing a property calls the host's notification handler
  * synchronously, from inside key handling, and that handler runs while librime
- * holds its service lock: it must not call back into librime at all, not even
- * set_resolver (that self-deadlocks), and not process_key.
+ * holds its service lock: it must not call back into librime at all. Anything
+ * that leads to another notification - process_key, set_property, set_option -
+ * re-enters that lock and deadlocks.
  *
  * Indices are absolute throughout, and that is what the host should use for
  * highlighting and selecting too: rime->highlight_candidate and
@@ -103,14 +113,23 @@
  * engine rather than the switcher, so the panel neither loses your registration
  * nor asks you about its own schema list.
  *
- * Lifecycle: call clear_resolver before destroying the session. Without it a
- * registration outlives its session, and a later session whose context lands on
- * the same address could inherit it.
+ * Call clear_resolver before destroying the session. It is not what frees the
+ * registration - that ends with the session, and a later session cannot inherit
+ * it - but it releases your user_data at a time you choose, and it is the only
+ * thing that removes the ambiguity below.
+ *
+ * clear_resolver finds a registration by session id, and an id is the session
+ * object's address: once a session is gone, its id can come back on a new one
+ * that has registered as well, and a late clear_resolver with the stale id then
+ * clears *that* session's registration - silently dropping it back to fixed
+ * pages. Clearing while the session is alive is unambiguous; that is the reason
+ * this call belongs before destroy_session rather than after.
  */
 #ifndef RIME_VARPAGE_API_H_
 #define RIME_VARPAGE_API_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "rime_api.h"  // for RimeCustomApi / RimeModule / RimeSessionId
 

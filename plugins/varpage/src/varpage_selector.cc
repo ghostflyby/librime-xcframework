@@ -98,14 +98,21 @@ ProcessResult VarPageSelector::ProcessKeyEvent(const KeyEvent& key_event) {
         return kAccepted;
     } else {
       // Any other action - previous_candidate, next_candidate, home, end - is
-      // the base's to run, and handing the key over reproduces the built-in
-      // exactly: the base runs keymap bindings *before* the select keys, so a
-      // key bound to one of these behaves as it always did, including falling
-      // back to the built-in slot arithmetic if the action declines.
+      // the base's to run, and it runs *before* the select keys, so a key bound
+      // to one of these must not be read as a slot. Computing the slot first
+      // would shadow the binding: a key bound to, say, next_candidate would
+      // select a candidate rather than move.
       //
-      // Computing the slot here instead would shadow the binding: a key bound
-      // to, say, next_candidate would select a candidate rather than move.
-      return Selector::ProcessKeyEvent(key_event);
+      // Run it here rather than handing the whole event to the base. The base
+      // would run this action and then, if it declined, its *own* select-key
+      // block - whose slot arithmetic is the built-in page_size one, because
+      // SelectCandidateAt is a non-virtual member it calls unqualified. A slot
+      // that the host's page does not contain would therefore resolve against
+      // the built-in page and select a candidate the host never offered. When
+      // the action declines, control falls through to the select keys below,
+      // which are the host's.
+      if ((this->*(binding->second))(ctx))
+        return kAccepted;
     }
   }
   // A key the config unbound with `noop` is not in the keymap at all, so it
@@ -135,7 +142,10 @@ ProcessResult VarPageSelector::ProcessKeyEvent(const KeyEvent& key_event) {
     return kAccepted;
   }
 
-  return Selector::ProcessKeyEvent(key_event);
+  // Nothing here or above handled the key. The base has nothing left to offer:
+  // its keymap stage would re-run the action that just declined, and its select
+  // keys are the built-in page's, which this class exists to replace.
+  return kNoop;
 }
 
 bool VarPageSelector::TurnPreviousPage(Context* ctx) const {

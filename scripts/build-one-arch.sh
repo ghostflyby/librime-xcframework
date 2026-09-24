@@ -121,6 +121,13 @@ export VCPKG_OSX_DEPLOYMENT_TARGET="${VCPKG_OSX_DEPLOYMENT_TARGET:-${deployment_
 # CLEAN=1 discards everything first, for when a build has gone strange in a way
 # the guards cannot see.
 clean="${CLEAN:-0}"
+case "${clean}" in
+  0 | 1) ;;
+  *)
+    printf 'CLEAN must be 0 or 1, got: %s\n' "${clean}" >&2
+    exit 2
+    ;;
+esac
 stamp_dir="${work_dir}/stamps"
 mkdir -p "${stamp_dir}"
 
@@ -367,8 +374,22 @@ run_tests() {
   # verify_merged_plugins documents.
   printf 'checking the plugin tests registered\n'
   registered="$(cd "${test_build_dir}" && ctest -N)"
-  if [[ "${registered}" != *varpage_behavioral* ]]; then
-    printf 'the varpage behavioral test is not registered with ctest; it needs BUILD_TEST and BUILD_SHARED_LIBS\n' >&2
+  # Every local plugin that ships a tests/ directory is expected to register its
+  # test with ctest. Taken from the manifest rather than named here, so a plugin
+  # added later cannot go unchecked: a registration whose condition silently did
+  # not hold would leave a clean run of upstream's suite as the whole report.
+  local missing_tests=() plugin_name
+  while IFS= read -r plugin_name; do
+    [[ -d "${repo_root}/plugins/${plugin_name}/tests" ]] || continue
+    if [[ "${registered}" != *"${plugin_name}_behavioral"* ]]; then
+      missing_tests+=("${plugin_name}")
+    fi
+  done < <(plugin_names)
+
+  if [[ ${#missing_tests[@]} -gt 0 ]]; then
+    printf 'behavioral test(s) not registered with ctest: %s\n' \
+      "${missing_tests[*]}" >&2
+    printf 'a plugin registers its test when BUILD_TEST and BUILD_SHARED_LIBS are on\n' >&2
     printf '%s\n' "${registered}" >&2
     exit 1
   fi
@@ -440,6 +461,11 @@ install_plugin_headers() {
   local upstream_names plugin_seen=() name
   upstream_names="$(cd "${source_work_dir}/src" && find . -maxdepth 1 -name '*.h' \
     -print | sed -n 's|^\./||p' | grep -v '_impl\.h$' || true)"
+  # The wrapper's own header is installed into this directory too, before the
+  # plugin headers are copied in, so a plugin shipping one by that name would
+  # replace the umbrella header instead of failing.
+  upstream_names+="
+RimeShim.h"
 
   while IFS= read -r -d '' header; do
     header_name="$(basename "${header}")"
@@ -460,6 +486,20 @@ install_plugin_headers() {
     destination="${include_dir}/${header_name}"
     cp "${header}" "${destination}"
   done < <(plugin_public_headers)
+}
+
+# Prints the manifest's local plugin names, one per line. Read from the manifest
+# rather than by globbing plugins/, so a directory that is not declared does not
+# quietly acquire the checks a declared plugin gets.
+plugin_names() {
+  python3 - "${repo_root}/plugins.json" <<'PY'
+import json
+import sys
+
+for plugin in json.load(open(sys.argv[1]))["plugins"]:
+    if plugin.get("local"):
+        print(plugin["name"])
+PY
 }
 
 # Prints the public headers of the manifest's local plugins, NUL-delimited.
@@ -548,7 +588,15 @@ fi
 # cannot see is an install *rule* that disappeared, which would leave its file
 # behind - a build-script change rather than a source one, and what CLEAN=1 is
 # for.
-install_guard="$(configure_guard "${platform}" "static+dynamic")"
+# The header names are part of what this directory is for: install_plugin_headers
+# writes them here, the release syncs the directory over the committed headers
+# with rsync --delete, and a renamed or removed plugin header would otherwise
+# linger in a reused tree and ship. The wrapper's own RimeShim.h is covered by
+# the build script itself rather than by the manifest, so its guard is the
+# script's own content, which the configure arguments do not carry.
+install_guard="$(configure_guard "${platform}" "static+dynamic" \
+  "headers=$(plugin_public_headers | tr '\0' '\n' | sort)" \
+  "shim=$(cksum < "${repo_root}/Sources/RimeHeaders/include/RimeShim.h")")"
 if stale "${stamp_dir}/install-${platform}" "${install_guard}"; then
   rm -rf "${install_dir}"
 fi

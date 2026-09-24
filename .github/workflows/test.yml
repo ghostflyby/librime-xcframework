@@ -41,6 +41,9 @@ on:
       # So that an edit to the test procedure is itself tested.
       - ".github/workflows/run-tests.yml"
       - ".github/workflows/test.yml"
+      # The workflow that consumes the reusable procedure, so an edit to how it
+      # is called is checked too.
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 permissions:

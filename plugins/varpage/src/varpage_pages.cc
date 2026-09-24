@@ -141,7 +141,9 @@ Context* RegistrationContext(Context* ctx) {
   Table& t = table();
   std::lock_guard lock(t.mutex);
   const auto it = t.switcher_contexts.find(ctx);
-  return it == t.switcher_contexts.end() ? ctx : it->second;
+  if (it == t.switcher_contexts.end() || !it->second)
+    return ctx;
+  return it->second;
 }
 
 void UpsertResolver(Context* ctx,
@@ -303,7 +305,11 @@ bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
   const Composition& comp = ctx->composition();
   if (comp.empty() || !comp.back().menu)
     return false;
-  Menu* menu = comp.back().menu.get();
+  // By shared_ptr, not a raw pointer: the resolver is called below, and a host
+  // that breaks the no-mutation rule rebuilds the composition - which would
+  // leave a raw Menu* dangling. Holding it is also what keeps the candidate
+  // list alive for the Prepare calls that follow.
+  const an<Menu> menu = comp.back().menu;
   const size_t selected = comp.back().selected_index;
 
   // The two page models are never mixed within one keystroke: the offset
