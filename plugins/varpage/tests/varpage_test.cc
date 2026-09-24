@@ -510,6 +510,35 @@ int main(int argc, char** argv) {
     rime->destroy_session(first);
   }
 
+  // -- An abandoned registration does not linger. ---------------------------
+  // A session that registered and was destroyed without clear_resolver leaves
+  // nothing for a later clear_resolver to find, once another session has been
+  // active.
+  //
+  // Which mechanism provides that is not isolated here, and cannot be from the
+  // public API: the allocator hands the destroyed session's context address to
+  // the next session (measured: it reliably does), so the next session's key
+  // reaches Find, which drops any entry whose session is gone. The sweep in
+  // OnContextChanged covers the other case - an entry at an address no live
+  // session touches - and no test reaches it. What is asserted below is the
+  // contract, which holds either way.
+  {
+    const RimeSessionId abandoned = rime->create_session();
+    rime->select_schema(abandoned, schema_id);
+    rime->simulate_key_sequence(abandoned, input);
+    Check(varpage->set_resolver(abandoned, &Resolver, nullptr),
+          "a session registers");
+    rime->destroy_session(abandoned);
+
+    const RimeSessionId survivor = rime->create_session();
+    rime->select_schema(survivor, schema_id);
+    rime->simulate_key_sequence(survivor, input);
+    rime->process_key(survivor, 0xFF56, 0);
+    Check(varpage->clear_resolver(abandoned) == false,
+          "an abandoned registration is gone by the time another session acts");
+    rime->destroy_session(survivor);
+  }
+
   // -- Properties follow the composition. -----------------------------------
   rime->clear_composition(session);
   Check(Property(session, "varpage.index").empty() &&

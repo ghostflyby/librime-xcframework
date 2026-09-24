@@ -425,7 +425,31 @@ bool SelectCandidateAt(const Schema* schema,
 }
 
 void OnContextChanged(Context* ctx) {
-  if (!ctx || !Registered(ctx))
+  if (!ctx)
+    return;
+
+  // This runs whenever a live session's composition or highlight changes, which
+  // makes it the natural place to sweep registrations whose session is gone.
+  // Nothing else can: librime has no session-destroyed notification to hook
+  // (DestroySession, CleanupStaleSessions and CleanupAllSessions all just erase
+  // the session from their map), so the weak reference is the only evidence of
+  // a death and something has to come along and look.
+  //
+  // Sweeping here is what makes clear_resolver optional. Without it, abandoning
+  // a registration would leave its entry - and, because the weak reference
+  // keeps the session's control block alive, the session's own allocation -
+  // until the next registration by anyone.
+  //
+  // The lock is not held across the publishing below: writing a property
+  // notifies the host, and the host is allowed to be slow.
+  bool registered = false;
+  {
+    Table& t = table();
+    std::lock_guard lock(t.mutex);
+    DropExpired(t);
+    registered = Find(ctx, t) != nullptr;
+  }
+  if (!registered)
     return;
   // Only the highlight: varpage.source names the model behind the most recent
   // page action, and this is not one, so it is left alone.

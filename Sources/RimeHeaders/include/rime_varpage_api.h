@@ -178,9 +178,16 @@ typedef struct rime_varpage_api_t {
                        RimeVarPageResolver resolver,
                        void* user_data);
 
-  // Unregister a session's resolver. Works after the session is gone, so it is
-  // safe to call from a session-destroyed callback. Returns false if the
-  // session had no registration.
+  // Unregister a session's resolver. Optional: an unregistered session's
+  // registration is dropped on its own, without any session-destroyed
+  // notification to drive it (librime has none) - see the file comment. Calling
+  // it releases `user_data` at a time you choose and removes the id-reuse
+  // ambiguity the file comment describes.
+  //
+  // Works after the session is gone, so it is safe to call from a
+  // session-destroyed callback. Returns false if the session had no
+  // registration left - including when an earlier clear, or the automatic drop,
+  // removed it.
   bool (*clear_resolver)(RimeSessionId session_id);
 } RimeVarPageApi;
 
