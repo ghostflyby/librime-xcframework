@@ -117,6 +117,50 @@ Package existing slice outputs:
 scripts/package-xcframework.sh
 ```
 
+Run the tests:
+
+```bash
+BUILD_TESTS=1 VCPKG_ROOT=/path/to/vcpkg scripts/build-one-arch.sh macos-arm64
+```
+
+That builds one shared tree and runs both suites against it, then stops: upstream
+librime's own `rime_test`, and the behavioral tests each plugin keeps in its own
+`tests/` directory that drive real input sessions. Both are registered with
+ctest, so they run and report together. Both run against the same upstream ref,
+patches and merged plugins the artifacts are built from, which is the point — a
+suite run against an unpatched checkout could not report anything about this
+repository. `build.yml` runs the same procedure - it is
+`.github/workflows/run-tests.yml`, a reusable workflow - and packaging depends on
+it, so a failing suite stops a release. Pull requests that touch the build inputs
+run it too, as a check.
+
+The suite needs `gtest`, which is behind `vcpkg.json`'s `tests` feature, so no
+artifact build installs a test framework; `BUILD_TESTS` configures its own tree
+and stops after the tests rather than producing slices. It refuses an iOS slice
+or a non-native architecture, since the test binary has to run on the host.
+
+The committed headers are checked on their own, without a build:
+
+```bash
+scripts/verify-committed-headers.sh
+```
+
+That is what a pull request runs first, and it covers what the package ships:
+that a plugin's public header is identical in both places it is committed, that
+the umbrella still compiles as a module, and that the API notes and Swift names
+describe the headers next to them.
+
+To run just a plugin's behavioral tests against an existing test tree, either
+select it from ctest or call its runner directly:
+
+```bash
+(cd .build/build-macos-arm64-test && ctest -R varpage_behavioral --output-on-failure)
+plugins/varpage/tests/run.sh --build-dir .build/build-macos-arm64-test
+```
+
+The reasoning behind this split, and what a new test must cover, is in
+`AGENTS.md` under Tests.
+
 Packaging also refreshes the sources this repository commits — the public
 headers under `Sources/RimeHeaders/include` — so they always match the
 artifacts that were just produced. The linker stub's skeletons are not committed
@@ -128,6 +172,12 @@ and ships them as `librime-stub.zip` alongside the other artifacts.
 Outputs are written to `out/` and `dist/`. Each slice also gets a `source.env`
 recording the resolved upstream repo/ref/version/commit, which is what the
 packaging job reads from the downloaded slices.
+
+Work directories under `.build/` are reused between runs, so a rebuild after a
+source edit takes seconds rather than a full compile. Each one records what it was
+created for - the upstream ref and patches for the source tree, the configure
+arguments for a build tree - and is recreated only when that changes. `CLEAN=1`
+discards them first when a tree needs starting over.
 
 With no `UPSTREAM_REF`, the upstream **working tree** is built, so uncommitted
 edits in a development checkout are what gets compiled; `UPSTREAM_REF` builds
@@ -145,18 +195,20 @@ release builds, so consumers get them without loading anything at runtime:
 - `librime-octagram` (module `octagram`)
 - `librime-predict` (module `predict`)
 
-They also merge one plugin that belongs to this repository rather than upstream:
+They also merge two plugins that belong to this repository rather than upstream:
 
 - `logsink` — forwards librime's diagnostics to host logging systems
   (`plugins/logsink`)
+- `varpage` — variable-length candidate pages driven by the host's layout
+  (`plugins/varpage`)
 
 Plugins live in `plugins/`: the three upstream ones are git submodules pinned to
-explicit commits, and `logsink` is a source directory of this repository (marked
-`"local": true` in the manifest). `plugins.json` is the manifest the build
-reads. `scripts/prepare-plugins.sh` copies each plugin into the upstream source
-tree, applies the per-plugin patches listed in the manifest, and verifies the
-license of every plugin that comes from outside this repository before merging
-it.
+explicit commits, and the local ones are source directories of this repository
+(marked `"local": true` in the manifest). `plugins.json` is the manifest the
+build reads. `scripts/prepare-plugins.sh` copies each plugin into the upstream
+source tree, applies the per-plugin patches listed in the manifest, and verifies
+the license of every plugin that comes from outside this repository before
+merging it.
 
 `librime-lua` does not vendor its own Lua: the interpreter comes from the vcpkg
 `lua` port, and the plugin is patched to use `find_package(Lua)` instead of
@@ -235,6 +287,80 @@ reliable call site is `main()`, because constructor order follows link order, so
 anything logged before that is structurally uncapturable by an in-process sink.
 That window is empty in current librime — its module constructors only register
 and do not log — but it is a property of upstream, not a guarantee of this API.
+
+### Candidate paging: the `varpage` plugin
+
+librime's built-in `selector` assumes a fixed page size (`menu/page_size`):
+Page Up / Page Down move by whole pages of that length, and the select keys pick
+slots relative to a page boundary computed from it. That cannot hold for a
+candidate window laid out against the screen, where how many candidates fit
+depends on how wide they are.
+
+`varpage` replaces the component registered as `selector`, so an existing
+`engine/processors: - selector` entry picks it up unchanged, and asks the host
+where the page boundaries are instead of deriving them
+(`rime_varpage_api.h`, shipped with the public headers):
+
+```c
+#include <rime_api.h>
+#include <rime_varpage_api.h>
+
+RimeModule* module = rime->find_module("varpage");
+RimeVarPageApi* varpage = (RimeVarPageApi*)module->get_api();
+varpage->set_resolver(session, my_resolver, my_context);
+varpage->clear_resolver(session);   // before destroying the session
+```
+
+The resolver answers one question: which page contains a given candidate index.
+Everything else is either derived from that, or already known to the host, which
+is the side computing the layout. There is deliberately no way to push a page in,
+no delegated page turn, and no index-to-page query — each of those would ask the
+host a question it can answer itself, and the first would put a second copy of
+the layout inside the module to keep valid.
+
+Everything shaped by configuration is kept: the four binding sections
+(`selector`, `selector/vertical`, `selector/linear`, `selector/vertical/linear`)
+with their defaults and the full action vocabulary,
+`menu/alternative_select_keys` and the digit/keypad fallback,
+`menu/page_down_cycle`, the `_vertical` / `_linear` options, and the segment's
+`paging` tag that enables `key_binder`'s `when: paging` bindings. With no host
+registered, or when the host answers "unknown", it falls back to the built-in
+arithmetic, so it is a drop-in replacement. There is deliberately no
+configuration switch to turn it off: whether pages vary is a rendering decision,
+so only the renderer makes it.
+
+For a host, three points matter:
+
+- **Answer for every page you have laid out, not just the visible one.** A page
+  turn asks about the candidate just past the current page, which may not be on
+  screen yet. Answer "unknown" there and that keystroke falls back to the
+  built-in `page_size` arithmetic, which in a variable-length layout is the wrong
+  page. Answers must also tile — the page after a given one begins where it ends
+  — because the highlight's offset is carried across the turn.
+- **The resolver runs inside key handling.** It must be cheap and must not call
+  back into librime's mutating entry points (`process_key`, `highlight`,
+  `select`, `set_option`, `set_property`, `apply_schema`). Reading candidates is
+  fine, including materializing the ones it needs. Whether it precomputes layout
+  or computes on demand is entirely the host's choice; the plugin only promises
+  to ask rarely — never for candidate moves, twice per page turn.
+- **Highlight and select by absolute index.** `highlight_candidate` and
+  `select_candidate` take absolute indices and stay correct. `change_page` and
+  the `*_on_current_page` functions are hard-wired to the built-in page math and
+  must not be used. One consequence: the `paging` tag that `when: paging` bindings
+  read is set by the module's own moves, so those bindings follow keyboard page
+  turns; a host moving the highlight from its own UI should treat `-` and `,` as
+  input. Call `clear_resolver` before destroying the session, so a registration
+  cannot outlive it.
+
+The highlight is published as session properties — `varpage.index` (absolute
+index, cleared when the composition ends) and `varpage.source` (`client` or
+`fallback`, naming the model behind the most recent page move) — so a host and
+any Lua script read the same answer.
+
+`menu.*` in `get_context` is unaffected and still describes the built-in window;
+it is not the host's page. `menu.page_size` doubles as the fallback page length
+and as the cap on `select_labels`, so a host that wants a full set of labels
+should set it to the largest page it can display.
 
 Two upstream behaviors matter for this arrangement:
 

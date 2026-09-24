@@ -1,0 +1,512 @@
+//
+// Copyright (c) 2026, librime-xcframework contributors
+// Distributed under the BSD 3-Clause License; see LICENSE.
+//
+#include "varpage_pages.h"
+
+#include <algorithm>
+#include <map>
+#include <mutex>
+#include <string>
+
+#include <rime/common.h>
+#include <rime/composition.h>
+#include <rime/context.h>
+#include <rime/menu.h>
+#include <rime/schema.h>
+#include <rime/service.h>
+
+namespace rime::varpage {
+
+namespace {
+
+constexpr char kIndexProperty[] = "varpage.index";
+constexpr char kSourceProperty[] = "varpage.source";
+
+constexpr char kSourceClient[] = "client";
+constexpr char kSourceFallback[] = "fallback";
+
+struct Entry {
+  RimeSessionId session_id = 0;
+  // The session object, held weakly. A session id is the session's own address,
+  // so a destroyed session's id can come back on a new session and every
+  // numeric comparison would say "same"; the control block does not. This is
+  // what makes a registration left behind by a destroyed session detectable
+  // instead of being inherited by its successor.
+  std::weak_ptr<Session> session;
+  RimeVarPageResolver resolver = nullptr;
+  void* user_data = nullptr;
+};
+
+struct Table {
+  std::mutex mutex;
+  std::map<const Context*, Entry> by_context;
+  std::map<RimeSessionId, Context*> by_session;
+  // Contexts owned by a schema switcher, mapped to the composing engine's
+  // context each was opened over. Published and removed by the switcher's own
+  // selector instance.
+  std::map<Context*, Context*> switcher_contexts;
+};
+
+// Deliberately never destroyed: registrations outlive any teardown order the
+// host picks, and a static destructor would only create a race with it.
+Table& table() {
+  static auto instance = new Table;
+  return *instance;
+}
+
+size_t PageSize(const Schema* schema) {
+  const int page_size = schema ? schema->page_size() : 0;
+  return page_size > 0 ? static_cast<size_t>(page_size) : 1;
+}
+
+// The built-in page: `page_size` candidates aligned to a multiple of
+// page_size. The last page is left short rather than clipped, exactly as the
+// built-in selector leaves it, so Highlight and Select clamp as before.
+PageGeometry FixedPage(const Schema* schema, const size_t index) {
+  const size_t page_size = PageSize(schema);
+  return PageGeometry{.start = index / page_size * page_size,
+                      .length = page_size};
+}
+
+// Whether the registration behind `entry` still belongs to a live session.
+bool Live(const Entry& entry) {
+  return !entry.session.expired();
+}
+
+// Caller holds the lock. Drops the id from by_session, but only when it still
+// names this context: an id can have been handed back to a new session whose
+// registration now owns that key, and clearing it would unregister a live
+// session.
+void ForgetSession(Table& t,
+                   const RimeSessionId session_id,
+                   const Context* ctx) {
+  if (const auto session = t.by_session.find(session_id);
+      session != t.by_session.end() && session->second == ctx)
+    t.by_session.erase(session);
+}
+
+// Caller holds the lock. Drops everything filed under a session that is gone,
+// so a leaked registration neither pins the allocation its weak reference keeps
+// alive nor lingers to be mistaken for a live one later.
+void DropExpired(Table& t) {
+  for (auto it = t.by_context.begin(); it != t.by_context.end();) {
+    if (Live(it->second)) {
+      ++it;
+      continue;
+    }
+    ForgetSession(t, it->second.session_id, it->first);
+    it = t.by_context.erase(it);
+  }
+}
+
+// Caller holds the lock. Finds the entry for `ctx`, dropping it when its
+// session is gone - the same guard as DropExpired, applied to the one entry a
+// keystroke is asking about.
+Entry* Find(const Context* ctx, Table& t) {
+  const auto it = t.by_context.find(ctx);
+  if (it == t.by_context.end())
+    return nullptr;
+  if (!Live(it->second)) {
+    ForgetSession(t, it->second.session_id, ctx);
+    t.by_context.erase(it);
+    return nullptr;
+  }
+  return &it->second;
+}
+
+// Copies the entry for `ctx` out of the table. A copy rather than a reference
+// because the resolver is called with no lock held.
+bool Lookup(const Context* ctx, Entry* entry) {
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  const Entry* found = Find(ctx, t);
+  if (!found)
+    return false;
+  *entry = *found;
+  return true;
+}
+
+bool Registered(const Context* ctx) {
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  return Find(ctx, t) != nullptr;
+}
+
+// The context a registration belongs under. While a schema switcher is open,
+// Session::context() reports the panel's own context, whose only visitor is the
+// panel's selector; the composing engine is the engine the panel was opened
+// over, so file there instead.
+Context* RegistrationContext(Context* ctx) {
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  const auto it = t.switcher_contexts.find(ctx);
+  if (it == t.switcher_contexts.end() || !it->second)
+    return ctx;
+  return it->second;
+}
+
+void UpsertResolver(Context* ctx,
+                    const RimeSessionId session_id,
+                    const std::shared_ptr<Session>& session,
+                    const RimeVarPageResolver resolver,
+                    void* user_data) {
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  DropExpired(t);
+
+  // Two sessions must never share a context, so a later clear_resolver for a
+  // previous occupant cannot unregister the current one: drop any other id
+  // still naming this context.
+  for (auto it = t.by_session.begin(); it != t.by_session.end();) {
+    if (it->first != session_id && it->second == ctx)
+      it = t.by_session.erase(it);
+    else
+      ++it;
+  }
+  // And one id maps to one context: a session that registers again from a
+  // different context leaves its previous row behind otherwise.
+  const auto previous = t.by_session.find(session_id);
+  if (previous != t.by_session.end() && previous->second != ctx)
+    t.by_context.erase(previous->second);
+  t.by_session[session_id] = ctx;
+
+  Entry& entry = t.by_context[ctx];
+  // Reset when this context held a *different* session's registration, or this
+  // id's own registration from a session that no longer exists - the reused-id
+  // case, which the id comparison alone cannot see.
+  if (entry.session_id != session_id || entry.session.expired())
+    entry = Entry{};
+  entry.session_id = session_id;
+  entry.session = session;
+  entry.resolver = resolver;
+  entry.user_data = user_data;
+}
+
+// Writes a property only when it changes: every write reaches the host's
+// notification handler synchronously, so a redundant one is a wasted round trip
+// through the host.
+void WriteProperty(Context* ctx, const char* name, const std::string& value) {
+  if (ctx->get_property(name) == value)
+    return;
+  ctx->set_property(name, value);
+}
+
+// Writes an empty value, which readers see as "not set" (RimeGetProperty
+// reports false for an empty string). Used when there is no composition, so a
+// host is not left reading the highlight of a composition that has ended.
+void Unpublish(Context* ctx) {
+  WriteProperty(ctx, kIndexProperty, std::string());
+  WriteProperty(ctx, kSourceProperty, std::string());
+}
+
+void PublishIndex(Context* ctx) {
+  const Composition& comp = ctx->composition();
+  if (comp.empty()) {
+    Unpublish(ctx);
+    return;
+  }
+  WriteProperty(ctx, kIndexProperty,
+                std::to_string(comp.back().selected_index));
+}
+
+// Publishes the outcome of a page action. `from_host` says whether the host's
+// pages determined this keystroke - that is, whether the resolver answered for
+// the position the highlight was on - which is the question a host debugging
+// its own layout is asking. Only page actions write the source, so it always
+// names the model behind the most recent page move.
+void PublishDecision(Context* ctx, const size_t landed, const bool from_host) {
+  // Nothing is published for a session that never registered: the properties
+  // are this module's answer to "what did my resolver decide", and a host that
+  // is not asking should not receive them.
+  if (!Registered(ctx))
+    return;
+  WriteProperty(ctx, kIndexProperty, std::to_string(landed));
+  WriteProperty(ctx, kSourceProperty,
+                from_host ? kSourceClient : kSourceFallback);
+}
+
+// Moves the highlight and tags the segment. Returns the index the engine
+// actually holds, which can differ from the one asked for because Highlight
+// clamps, or because the move's notifier rebuilt the composition underneath.
+//
+// The tag goes on after the move, not before: Highlight fires the update
+// notifier, which re-runs Compose and can rebuild or empty the composition, so
+// a Segment reference taken before it may be gone by the time it is tagged. The
+// built-in selector tags after moving for the same reason.
+size_t HighlightAndTag(Context* ctx, const size_t index) {
+  ctx->Highlight(index);
+  Composition& comp = ctx->composition();
+  if (comp.empty())
+    return index;
+  comp.back().tags.insert("paging");
+  return comp.back().selected_index;
+}
+
+// The page holding `index`. Fails only when there is no candidate list or no
+// candidate at that index; otherwise it always answers, falling back to the
+// built-in page when the host has nothing to say. `from_host` reports which of
+// the two answered.
+bool ResolvePage(const Schema* schema,
+                 Context* ctx,
+                 const size_t index,
+                 PageGeometry* page,
+                 bool* from_host,
+                 const bool allow_host) {
+  *from_host = false;
+  const Composition& comp = ctx->composition();
+  if (comp.empty() || !comp.back().menu)
+    return false;
+  if (comp.back().menu->Prepare(index + 1) <= index)
+    return false;
+
+  if (allow_host) {
+    Entry entry;
+    if (Lookup(ctx, &entry) && entry.resolver) {
+      RimeVarPage answer = {0, 0};
+      if (entry.resolver(entry.user_data, entry.session_id, index, &answer)) {
+        const PageGeometry resolved{answer.start, answer.length};
+        // A page has to contain the index it was asked about, and be non-empty:
+        // an answer that fails either test is not usable, and the built-in page
+        // stands in for it. varpage.source reports the downgrade.
+        if (resolved.length > 0 && resolved.Contains(index)) {
+          *page = resolved;
+          *from_host = true;
+          return true;
+        }
+      }
+    }
+  }
+
+  *page = FixedPage(schema, index);
+  return true;
+}
+
+}  // namespace
+
+void PublishSwitcherContext(Context* switcher_context,
+                            Context* attached_context) {
+  if (!switcher_context)
+    return;
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  t.switcher_contexts[switcher_context] = attached_context;
+}
+
+void UnpublishSwitcherContext(Context* switcher_context) {
+  if (!switcher_context)
+    return;
+  Table& t = table();
+  std::lock_guard lock(t.mutex);
+  t.switcher_contexts.erase(switcher_context);
+}
+
+bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
+  const Composition& comp = ctx->composition();
+  if (comp.empty() || !comp.back().menu)
+    return false;
+  // By shared_ptr, not a raw pointer: the resolver is called below, and a host
+  // that breaks the no-mutation rule rebuilds the composition - which would
+  // leave a raw Menu* dangling. Holding it is also what keeps the candidate
+  // list alive for the Prepare calls that follow.
+  const an<Menu> menu = comp.back().menu;
+  const size_t selected = comp.back().selected_index;
+
+  // The two page models are never mixed within one keystroke: the offset
+  // carried across a turn is measured inside the page it came from, so landing
+  // in a page from the other model at a foreign offset could move the highlight
+  // backwards. When the host cannot place the page being turned to, the
+  // built-in arithmetic serves the whole keystroke instead.
+  PageGeometry current;
+  bool from_host = false;
+  if (ResolvePage(schema, ctx, selected, &current, &from_host, allow_host) &&
+      from_host) {
+    const size_t probe = current.end();
+    if (menu->Prepare(probe + 1) <= probe) {
+      // Nothing where the next page would begin, so this is the last page.
+      if (schema && schema->page_down_cycle()) {
+        PublishDecision(ctx, HighlightAndTag(ctx, 0), from_host);
+      }
+      // Without page_down_cycle the key is consumed without moving, so page
+      // down is not delivered to the application.
+      return true;
+    }
+
+    PageGeometry next;
+    bool next_from_host = false;
+    // The page after this one has to begin where this one ends. That tiling is
+    // what makes the turn move forward, because the offset measured in
+    // `current` is carried into `next`: an answer that merely *contains* the
+    // probe index may start before it, and the highlight would land behind
+    // where it started. Such an answer is declined, and the built-in arithmetic
+    // serves instead.
+    if (ResolvePage(schema, ctx, probe, &next, &next_from_host, allow_host) &&
+        next_from_host && next.start == probe) {
+      const size_t offset = std::min(selected - current.start, next.length - 1);
+      PublishDecision(ctx, HighlightAndTag(ctx, next.start + offset), true);
+      return true;
+    }
+  }
+
+  const size_t page_size = PageSize(schema);
+  if (const size_t probe = selected / page_size * page_size + page_size;
+      menu->Prepare(probe + 1) <= probe) {
+    if (schema && schema->page_down_cycle()) {
+      PublishDecision(ctx, HighlightAndTag(ctx, 0), false);
+    }
+    return true;
+  }
+  // Highlight clamps to the last candidate, which is what the built-in's
+  // explicit clamp to candidate_count - 1 amounts to.
+  PublishDecision(ctx, HighlightAndTag(ctx, selected + page_size), false);
+  return true;
+}
+
+bool PreviousPage(const Schema* schema, Context* ctx, const bool allow_host) {
+  const Composition& comp = ctx->composition();
+  if (comp.empty())
+    return false;
+  const size_t selected = comp.back().selected_index;
+
+  PageGeometry current;
+  bool from_host = false;
+  if (comp.back().menu &&
+      ResolvePage(schema, ctx, selected, &current, &from_host, allow_host) &&
+      from_host) {
+    if (current.start == 0) {
+      // Already on the first page: there is no page to turn back to, and the
+      // built-in consumes the key here rather than passing it on.
+      PublishDecision(ctx, HighlightAndTag(ctx, 0), true);
+      return true;
+    }
+
+    // No tiling guard is needed on this side. The probe is the candidate just
+    // before this page, whose answer must contain it, which already forces
+    // previous.start <= current.start - 1; the target is therefore at most
+    // selected - 1 and cannot move forward.
+    PageGeometry previous;
+    bool previous_from_host = false;
+    if (ResolvePage(schema, ctx, current.start - 1, &previous,
+                    &previous_from_host, allow_host) &&
+        previous_from_host) {
+      const size_t offset =
+          std::min(selected - current.start, previous.length - 1);
+      PublishDecision(ctx, HighlightAndTag(ctx, previous.start + offset), true);
+      return true;
+    }
+    // As in NextPage: the whole keystroke falls back rather than mixing models.
+  }
+
+  const size_t page_size = PageSize(schema);
+  const size_t target = selected < page_size ? 0 : selected - page_size;
+  PublishDecision(ctx, HighlightAndTag(ctx, target), false);
+  return true;
+}
+
+bool SelectCandidateAt(const Schema* schema,
+                       Context* ctx,
+                       const int slot,
+                       const bool allow_host) {
+  const Composition& comp = ctx->composition();
+  if (comp.empty() || slot < 0)
+    return false;
+  PageGeometry current;
+  bool from_host = false;
+  if (!ResolvePage(schema, ctx, comp.back().selected_index, &current,
+                   &from_host, allow_host))
+    return false;
+  // The slot is relative to the page the highlight is on, and a variable-length
+  // page has no fixed slot count: a slot past the end of this page does not
+  // reach into the next one. The caller still consumes the key, as the built-in
+  // selector does.
+  if (static_cast<size_t>(slot) >= current.length)
+    return false;
+  return ctx->Select(current.start + static_cast<size_t>(slot));
+}
+
+void OnContextChanged(Context* ctx) {
+  if (!ctx)
+    return;
+
+  // This runs whenever a live session's composition or highlight changes, which
+  // makes it the natural place to sweep registrations whose session is gone.
+  // Nothing else can: librime has no session-destroyed notification to hook
+  // (DestroySession, CleanupStaleSessions and CleanupAllSessions all just erase
+  // the session from their map), so the weak reference is the only evidence of
+  // a death and something has to come along and look.
+  //
+  // Sweeping here is what makes clear_resolver optional. Without it, abandoning
+  // a registration would leave its entry - and, because the weak reference
+  // keeps the session's control block alive, the session's own allocation -
+  // until the next registration by anyone.
+  //
+  // The lock is not held across the publishing below: writing a property
+  // notifies the host, and the host is allowed to be slow.
+  bool registered = false;
+  {
+    Table& t = table();
+    std::lock_guard lock(t.mutex);
+    DropExpired(t);
+    registered = Find(ctx, t) != nullptr;
+  }
+  if (!registered)
+    return;
+  // Only the highlight: varpage.source names the model behind the most recent
+  // page action, and this is not one, so it is left alone.
+  PublishIndex(ctx);
+}
+
+bool SetResolver(const RimeSessionId session_id,
+                 const RimeVarPageResolver resolver,
+                 void* user_data) {
+  if (!resolver)
+    return false;
+  const an<Session> session(Service::instance().GetSession(session_id));
+  if (!session)
+    return false;
+  Context* ctx = session->context();
+  if (!ctx)
+    return false;
+  UpsertResolver(RegistrationContext(ctx), session_id, session, resolver,
+                 user_data);
+  return true;
+}
+
+bool ClearResolver(const RimeSessionId session_id) {
+  Context* ctx = nullptr;
+  bool session_alive = false;
+  {
+    Table& t = table();
+    std::lock_guard lock(t.mutex);
+    const auto it = t.by_session.find(session_id);
+    if (it == t.by_session.end())
+      return false;
+    ctx = it->second;
+    if (const auto entry = t.by_context.find(ctx);
+        entry != t.by_context.end()) {
+      session_alive = Live(entry->second);
+      t.by_context.erase(entry);
+    }
+    t.by_session.erase(it);
+  }
+  // Publishing stops with the registration, so clear the two properties the
+  // registration was maintaining rather than leaving a host to read the last
+  // values indefinitely. The context is only touched while its session is still
+  // alive, which is also what makes this safe after the session is gone: then
+  // the pointer is not ours to dereference. (Asking the service instead would
+  // be wrong while the switcher is open, when the session's context is the
+  // panel's.)
+  if (ctx && session_alive)
+    Unpublish(ctx);
+  return true;
+}
+
+void Reset() {
+  auto& [mutex, by_context, by_session, switcher_contexts] = table();
+  std::lock_guard lock(mutex);
+  by_context.clear();
+  by_session.clear();
+  switcher_contexts.clear();
+}
+
+}  // namespace rime::varpage

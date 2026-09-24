@@ -59,18 +59,93 @@ case "${slice}" in
     ;;
 esac
 
+# Test mode. Validated here, before anything is deleted or exported: a refused
+# run must not first destroy the slice's previous output, and `BUILD_TESTS` must
+# not be accepted loosely - values like "true" would take the artifact path, run
+# no tests, and still exit 0, which is the one failure this mode cannot afford.
+# Unset means artifact mode; set to anything other than 0 or 1 is an error, empty
+# included, because an empty value is a mistake rather than a request to skip.
+build_tests="${BUILD_TESTS-0}"
+if [[ -z "${build_tests}" ]]; then
+  printf 'BUILD_TESTS is set but empty; set it to 1 to run the tests, or unset it\n' >&2
+  exit 2
+fi
+case "${build_tests}" in
+  0 | 1) ;;
+  *)
+    printf 'BUILD_TESTS must be 0 or 1, got: %s\n' "${build_tests}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${build_tests}" -eq 1 ]]; then
+  case "${slice}" in
+    macos-* | arm64 | x86_64) ;;
+    *)
+      printf 'BUILD_TESTS needs a macOS slice: the test binary has to run on this host, and %s builds for %s\n' \
+        "${platform}" "${cmake_system_name:-macOS}" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "${arch}" != "$(uname -m)" ]]; then
+    printf 'BUILD_TESTS builds for %s but this host is %s; the test binary would not run\n' \
+      "${arch}" "$(uname -m)" >&2
+    exit 2
+  fi
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 work_dir="${WORK_DIR:-${repo_root}/.build}"
 build_dir="${work_dir}/build-${platform}"
 static_build_dir="${build_dir}-static"
 dynamic_build_dir="${build_dir}-dynamic"
+test_build_dir="${build_dir}-test"
 source_work_dir="${work_dir}/src-${platform}"
 install_dir="${OUT_DIR:-${repo_root}/out}/${platform}"
 static_install_dir="${install_dir}/static"
 dynamic_install_dir="${install_dir}/dynamic"
 configuration="${CONFIGURATION:-Release}"
 export VCPKG_OSX_DEPLOYMENT_TARGET="${VCPKG_OSX_DEPLOYMENT_TARGET:-${deployment_target}}"
+
+# Work directories are reused rather than recreated.
+#
+# Wiping them unconditionally was pure cost: a CI runner starts from an empty
+# workspace, so there was never anything to delete there, while locally it threw
+# away the compiler's work on every run - the difference between seconds and a
+# full rebuild for a one-file change. The build system already notices an edited
+# source file, so the only thing reuse needs is a guard on what a directory was
+# *created* for. Each directory records that, and is discarded when the guard no
+# longer matches, which is the case the wipe was really there for: a different
+# upstream ref, a different triplet, a different set of configure arguments.
+#
+# CLEAN=1 discards everything first, for when a build has gone strange in a way
+# the guards cannot see.
+clean="${CLEAN:-0}"
+case "${clean}" in
+  0 | 1) ;;
+  *)
+    printf 'CLEAN must be 0 or 1, got: %s\n' "${clean}" >&2
+    exit 2
+    ;;
+esac
+stamp_dir="${work_dir}/stamps"
+mkdir -p "${stamp_dir}"
+
+# Whether the directory behind `stamp` was made for something other than `guard`.
+stale() {
+  local stamp="$1" guard="$2"
+
+  [[ "${clean}" -eq 1 ]] && return 0
+  [[ -f "${stamp}" ]] || return 0
+  [[ "$(cat "${stamp}")" != "${guard}" ]]
+}
+
+# Records that the directory is now in the state `guard` describes. Called after
+# the step that fills it, so an interrupted run leaves the guard absent and the
+# next run starts that directory over rather than trusting it.
+mark_fresh() {
+  printf '%s\n' "$2" > "$1"
+}
 
 source_dir="${UPSTREAM_SOURCE_DIR:-}"
 if [[ -z "${source_dir}" ]]; then
@@ -121,8 +196,33 @@ for tool in cmake ninja; do
   fi
 done
 
-rm -rf "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${install_dir}"
-mkdir -p "${source_work_dir}" "${static_build_dir}" "${dynamic_build_dir}" "${static_install_dir}" "${dynamic_install_dir}"
+# The source tree is filled by the export or copy below, so it can be kept as it
+# is unless what it holds would no longer be produced: the ref it was exported
+# from, or the patches applied on top of it. Both fillers keep the rest in step -
+# `rsync --delete` for a working tree, `git archive | tar -x` for an export, and
+# `prepare-plugins.sh` rsyncs the plugin directories every run - so the ref, the
+# patches and the plugins are the whole of what a tree depends on.
+#
+# The patches have to be in the guard, not just the ref: `apply_patches` runs
+# against whatever tree it finds, and an already-patched tree makes an edited
+# patch neither apply nor reverse-apply, so a changed patch would be silently
+# ignored rather than applied.
+source_guard="ref=${upstream_ref}"
+while IFS= read -r -d '' patch_file; do
+  source_guard+=" patch:$(cksum < "${patch_file}")"
+done < <(find "${repo_root}/patches" -name '*.patch' -print0 | sort -z)
+if stale "${stamp_dir}/source-${platform}" "${source_guard}"; then
+  rm -rf "${source_work_dir}"
+fi
+mkdir -p "${source_work_dir}"
+
+# Test mode neither writes nor clears out/<platform>: it produces no artifacts,
+# and a run that removed a slice built earlier would be a surprise for anyone
+# running the two modes back to back. Artifact mode checks the same guard further
+# down, once the configure arguments it depends on exist.
+if [[ "${build_tests}" -eq 0 ]]; then
+  mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
+fi
 
 if [[ "${build_from_worktree}" -eq 0 ]]; then
   printf 'exporting %s from %s\n' "${upstream_ref}" "${source_dir}"
@@ -153,6 +253,9 @@ if [[ ! -f "${source_work_dir}/CMakeLists.txt" ]]; then
   printf 'selected source ref does not contain CMakeLists.txt: %s\n' "${source_work_dir}" >&2
   exit 1
 fi
+# The tree has been filled, patched and given its plugins, so it now matches the
+# guard written above and the next run may keep it.
+mark_fresh "${stamp_dir}/source-${platform}" "${source_guard}"
 
 configure_common=(
   -S "${source_work_dir}"
@@ -172,13 +275,26 @@ configure_common=(
   -DWITH_STATIC_DEPS=ON
   -DBUILD_MERGED_PLUGINS=ON
   -DBUILD_SEPARATE_LIBS=OFF
-  -DBUILD_TEST=OFF
-  -DBUILD_TESTING=OFF
   -DBUILD_TOOLS=OFF
   -DBUILD_SAMPLE=OFF
   -DENABLE_EXTERNAL_PLUGINS=OFF
 )
 
+# Upstream's test suite is a separate mode rather than a flag on the artifact
+# build, for two reasons: it needs gtest, which comes from the manifest's
+# "tests" feature precisely so artifact builds never install a test framework;
+# and it needs BUILD_SHARED_LIBS, which upstream requires before it will add its
+# test directory at all. Reusing this script is what makes the suite run against
+# the same upstream ref, patches and merged plugins as the artifacts - the point
+# of running it is to catch the packaging layer breaking librime itself, which a
+# separately configured build could not show. The mode, and the guards that keep
+# it to a runnable host, were validated at the top of this script.
+if [[ "${build_tests}" -eq 1 ]]; then
+  configure_common+=(-DBUILD_TEST=ON -DBUILD_TESTING=ON)
+  configure_common+=(-DVCPKG_MANIFEST_FEATURES=tests)
+else
+  configure_common+=(-DBUILD_TEST=OFF -DBUILD_TESTING=OFF)
+fi
 if [[ -n "${cmake_system_name}" ]]; then
   configure_common+=(-DCMAKE_SYSTEM_NAME="${cmake_system_name}")
 fi
@@ -187,17 +303,104 @@ if [[ -n "${osx_sysroot}" ]]; then
   configure_common+=(-DCMAKE_OSX_SYSROOT="${osx_sysroot}")
 fi
 
+# Identifies what a build directory's CMake cache depends on. The configure
+# arguments are the whole of it: they carry the source path, the arch and
+# deployment target, the triplet, the toolchain and the feature flags. A change to
+# any of them means the cache describes a configuration that is no longer being
+# asked for, so the directory is configured from scratch rather than reused.
+configure_guard() {
+  printf '%s\n' "${configure_common[@]}" "$@" | cksum
+}
+
 configure_and_install() {
   local output_dir="$1"
   local prefix="$2"
   local shared_libs="$3"
 
+  local guard
+  guard="$(configure_guard "${prefix}" "-DBUILD_SHARED_LIBS=${shared_libs}")"
+  local stamp
+  stamp="${stamp_dir}/$(basename "${output_dir}")"
+  if stale "${stamp}" "${guard}"; then
+    rm -rf "${output_dir}"
+  fi
+  mkdir -p "${output_dir}"
+
   cmake "${configure_common[@]}" \
     -B "${output_dir}" \
     -DCMAKE_INSTALL_PREFIX="${prefix}" \
     -DBUILD_SHARED_LIBS="${shared_libs}"
+  mark_fresh "${stamp}" "${guard}"
 
   cmake --build "${output_dir}" --config "${configuration}" --target install
+}
+
+# Builds and runs the two suites against one tree: upstream's own tests, and the
+# behavioral tests that each plugin keeps in its own tests/ directory and that
+# drive real input sessions. Both are registered with ctest - upstream's by its
+# own test/CMakeLists.txt, the plugins' by their CMakeLists - so one ctest run
+# covers them and reports them together. They run against the source this script
+# prepared: the same ref, patches and merged plugins the artifacts would come
+# from, which is the whole point, since a suite run against an unpatched checkout
+# could not report anything about this repository.
+run_tests() {
+  local guard
+  guard="$(configure_guard "-DCMAKE_INSTALL_PREFIX=${test_build_dir}/install" \
+    "-DBUILD_SHARED_LIBS=ON")"
+  local stamp
+  stamp="${stamp_dir}/$(basename "${test_build_dir}")"
+  if stale "${stamp}" "${guard}"; then
+    rm -rf "${test_build_dir}"
+  fi
+  mkdir -p "${test_build_dir}"
+
+  cmake "${configure_common[@]}" \
+    -B "${test_build_dir}" \
+    -DCMAKE_INSTALL_PREFIX="${test_build_dir}/install" \
+    -DBUILD_SHARED_LIBS=ON
+  mark_fresh "${stamp}" "${guard}"
+
+  cmake --build "${test_build_dir}" --config "${configuration}" \
+    --target rime_test
+
+  # A plugin's test registration is conditional (it needs a test build and a
+  # shared library), and a registration that silently did not happen would leave
+  # ctest reporting a clean run of upstream's suite alone. Check it is there
+  # before trusting that run.
+  #
+  # Captured into a variable rather than piped into `grep -q`: grep exits on the
+  # first match, and under `pipefail` the resulting SIGPIPE on ctest would fail
+  # the check and report a registered test as missing. This is the same trap
+  # verify_merged_plugins documents.
+  printf 'checking the plugin tests registered\n'
+  registered="$(cd "${test_build_dir}" && ctest -N)"
+  # Every local plugin that ships a tests/ directory is expected to register its
+  # test with ctest. Taken from the manifest rather than named here, so a plugin
+  # added later cannot go unchecked: a registration whose condition silently did
+  # not hold would leave a clean run of upstream's suite as the whole report.
+  local missing_tests=() plugin_name
+  while IFS= read -r plugin_name; do
+    [[ -d "${repo_root}/plugins/${plugin_name}/tests" ]] || continue
+    if [[ "${registered}" != *"${plugin_name}_behavioral"* ]]; then
+      missing_tests+=("${plugin_name}")
+    fi
+  done < <(plugin_names)
+
+  if [[ ${#missing_tests[@]} -gt 0 ]]; then
+    printf 'behavioral test(s) not registered with ctest: %s\n' \
+      "${missing_tests[*]}" >&2
+    printf 'a plugin registers its test when BUILD_TEST and BUILD_SHARED_LIBS are on\n' >&2
+    printf '%s\n' "${registered}" >&2
+    exit 1
+  fi
+
+  printf 'running the test suites\n'
+  # --no-tests=error because a suite that registers nothing still exits 0 by
+  # default, and this job's exit status is its only signal.
+  (
+    cd "${test_build_dir}"
+    ctest --output-on-failure --no-tests=error
+  )
 }
 
 prune_exported_headers() {
@@ -247,16 +450,56 @@ install_plugin_headers() {
   local include_dir="$1"
   local header header_name destination
 
+  # The collision this guards against is a name clash, and both ways it can happen
+  # are decidable from the sources: a plugin header named like one librime installs
+  # (which would shadow a public header), or two plugins shipping the same name
+  # (the second would silently replace the first).
+  #
+  # Checked against the sources rather than against what is already in the export
+  # directory, because the destination test - "the file exists" - fails the build
+  # on any leftover copy, and a reused out/ directory always has those.
+  local upstream_names plugin_seen=() name
+  upstream_names="$(cd "${source_work_dir}/src" && find . -maxdepth 1 -name '*.h' \
+    -print | sed -n 's|^\./||p' | grep -v '_impl\.h$' || true)"
+  # The wrapper's own header is installed into this directory too, before the
+  # plugin headers are copied in, so a plugin shipping one by that name would
+  # replace the umbrella header instead of failing.
+  upstream_names+="
+RimeShim.h"
+
   while IFS= read -r -d '' header; do
     header_name="$(basename "${header}")"
-    destination="${include_dir}/${header_name}"
-    if [[ -e "${destination}" ]]; then
-      printf 'plugin header %s would overwrite an exported header: %s\n' \
-        "${header}" "${destination}" >&2
+    if grep -qxF "${header_name}" <<< "${upstream_names}"; then
+      printf 'plugin header %s would shadow a librime public header of the same name\n' \
+        "${header}" >&2
       exit 1
     fi
+    for name in ${plugin_seen[@]+"${plugin_seen[@]}"}; do
+      if [[ "${name}" == "${header_name}" ]]; then
+        printf 'plugin header %s duplicates a header another plugin already exported\n' \
+          "${header}" >&2
+        exit 1
+      fi
+    done
+    plugin_seen+=("${header_name}")
+
+    destination="${include_dir}/${header_name}"
     cp "${header}" "${destination}"
   done < <(plugin_public_headers)
+}
+
+# Prints the manifest's local plugin names, one per line. Read from the manifest
+# rather than by globbing plugins/, so a directory that is not declared does not
+# quietly acquire the checks a declared plugin gets.
+plugin_names() {
+  python3 - "${repo_root}/plugins.json" <<'PY'
+import json
+import sys
+
+for plugin in json.load(open(sys.argv[1]))["plugins"]:
+    if plugin.get("local"):
+        print(plugin["name"])
+PY
 }
 
 # Prints the public headers of the manifest's local plugins, NUL-delimited.
@@ -284,6 +527,12 @@ collect_vcpkg_notices() {
   local notices_dir="$1"
   local share_dir copyright_file port_name destination
 
+  # Cleared rather than reused, unlike the build and install directories: this
+  # collection is the set of ports currently installed, and the guard on the
+  # install directory keys on the configure arguments rather than on vcpkg.json's
+  # contents. A dependency removed from the manifest would therefore leave its
+  # notice behind, and the bundle would claim a library the artifacts do not
+  # contain. Copying these files again costs nothing.
   rm -rf "${notices_dir}"
   mkdir -p "${notices_dir}/vcpkg" "${notices_dir}/librime"
 
@@ -324,6 +573,35 @@ collect_librime_bundled_notices() {
     printf 'warning: utf8-cpp license text not found for the notices bundle\n' >&2
   fi
 }
+
+# Test mode stops here: it exists to validate the packaging layer against
+# librime, not to produce artifacts, and building the static and dynamic slices
+# as well would only make a failing test slower to report.
+if [[ "${build_tests}" -eq 1 ]]; then
+  run_tests
+  printf 'tests passed for %s (source: %s)\n' "${platform}" "${upstream_ref}"
+  exit 0
+fi
+
+# out/<platform> is reused for the same reason the build trees are: the install
+# step rewrites what it installs, so clearing first only repeats work. What reuse
+# cannot see is an install *rule* that disappeared, which would leave its file
+# behind - a build-script change rather than a source one, and what CLEAN=1 is
+# for.
+# The header names are part of what this directory is for: install_plugin_headers
+# writes them here, the release syncs the directory over the committed headers
+# with rsync --delete, and a renamed or removed plugin header would otherwise
+# linger in a reused tree and ship. The wrapper's own RimeShim.h is covered by
+# the build script itself rather than by the manifest, so its guard is the
+# script's own content, which the configure arguments do not carry.
+install_guard="$(configure_guard "${platform}" "static+dynamic" \
+  "headers=$(plugin_public_headers | tr '\0' '\n' | sort)" \
+  "shim=$(cksum < "${repo_root}/Sources/RimeHeaders/include/RimeShim.h")")"
+if stale "${stamp_dir}/install-${platform}" "${install_guard}"; then
+  rm -rf "${install_dir}"
+fi
+mkdir -p "${static_install_dir}" "${dynamic_install_dir}"
+mark_fresh "${stamp_dir}/install-${platform}" "${install_guard}"
 
 configure_and_install "${static_build_dir}" "${static_install_dir}" OFF
 

@@ -1,0 +1,217 @@
+/*
+ * Copyright (c) 2026, librime-xcframework contributors
+ * Distributed under the BSD 3-Clause License; see LICENSE.
+ *
+ * rime_varpage_api.h - variable-length candidate pages for librime.
+ *
+ * librime's built-in selector assumes every page holds menu/page_size
+ * candidates: previous_page / next_page move by whole page_size steps, and the
+ * select keys pick page_size-relative slots. That assumption cannot hold for a
+ * candidate window laid out against the screen, where how many candidates fit
+ * depends on how wide they are.
+ *
+ * This module replaces the component registered as "selector", so an existing
+ * `engine/processors: - selector` entry picks it up unchanged, and asks the
+ * host where the page boundaries are instead of deriving them from page_size.
+ *
+ * It takes over whatever is registered as "selector" when its module loads, so
+ * the module has to load after the "default" group (core, dict, gears) - the
+ * default order. A host that lists modules explicitly in RimeTraits::modules
+ * must not put varpage before "default": gears' selector would then be
+ * registered second and win, every answer this module would have asked for
+ * would never be requested, and the host would lay out variable-length pages
+ * for an engine paging on the built-in grid.
+ *
+ * Everything shaped by configuration is kept:
+ *
+ *   - the four binding sections (selector, selector/vertical, selector/linear,
+ *     selector/vertical/linear), their defaults, and the action vocabulary
+ *     previous_candidate, next_candidate, previous_page, next_page, home, end,
+ *     noop - with noop still the way to unbind a default key;
+ *   - menu/alternative_select_keys (read at key time, so a script rewriting it
+ *     at runtime is honored), the digit and keypad fallback, and the quirk that
+ *     a select key past the end of a page is still consumed;
+ *   - menu/page_down_cycle, the _vertical / _linear / _horizontal options, and
+ *     the "paging" tag the segment carries after a page turn or a candidate
+ *     move, which is what enables key_binder's `when: paging` bindings.
+ *
+ * With no host registered, or when the host answers "unknown", the module falls
+ * back to the built-in arithmetic, so it is a drop-in replacement.
+ *
+ * There is deliberately no configuration switch to turn it off. Whether pages
+ * are variable is a rendering decision, so only the renderer may make it:
+ * unregister the resolver, or answer false for the request at hand. A schema
+ * author who disabled the module while the host still assumed variable-length
+ * pages would get a silently misplaced highlight, which is the failure this
+ * module exists to prevent.
+ *
+ * Only one thing is asked of the host: answer, for a candidate index, which
+ * page contains it. Everything else the module does with page geometry is
+ * derived from that, and everything the host does with pages it already knows -
+ * it is the side computing the layout. In particular:
+ *
+ *   - Pages are not pushed in. The host owns the layout, so it holds the answer
+ *     already; a copy of it inside the module would be a second source of truth
+ *     to keep valid across rendering, filters and re-segmentation.
+ *   - Page turns are not delegated. A host-driven turn is the host moving its
+ *     own highlight with rime->highlight_candidate, which takes an absolute
+ *     index and needs no help from here.
+ *   - There is no index-to-page query. A host that computes pages can answer
+ *     that question itself.
+ *
+ * What the module does not do is notice a highlight the host moved by itself:
+ * see the note on the "paging" tag below.
+ *
+ * The resolver is called synchronously from inside key handling, so it must be
+ * cheap and must not call back into librime's mutating entry points
+ * (process_key, highlight, select, set_option, set_property, apply_schema);
+ * reading the candidate list with candidate_list_from_index /
+ * candidate_list_next is fine, including materializing the candidates it needs.
+ * Whether it precomputes layout or computes on demand is the host's choice.
+ *
+ * The module asks rarely. Moving the highlight by one candidate never consults
+ * the resolver, and neither do home and end. A page turn resolves the page the
+ * highlight is on and the page being turned to, so it costs two calls; a select
+ * key costs one.
+ *
+ * The module publishes the highlight as a session property, so a host and any
+ * Lua script read the same answer:
+ *
+ *   varpage.index   absolute index of the highlighted candidate
+ *   varpage.source  "client" when the host's pages determined the most recent
+ *                   page move, "fallback" when the built-in page_size
+ *                   arithmetic did
+ *
+ * Both are cleared when the composition ends. Publishing starts with the
+ * registration, so a session that never registers sees no property traffic.
+ *
+ * Note that writing a property calls the host's notification handler
+ * synchronously, from inside key handling, and that handler runs while librime
+ * holds its service lock: it must not call back into librime at all. Anything
+ * that leads to another notification - process_key, set_property, set_option -
+ * re-enters that lock and deadlocks.
+ *
+ * Indices are absolute throughout, and that is what the host should use for
+ * highlighting and selecting too: rime->highlight_candidate and
+ * rime->select_candidate take absolute indices and stay correct here, while
+ * rime->change_page and the *_on_current_page functions are hard-wired to the
+ * built-in page_size arithmetic and must not be used with this module.
+ *
+ * One consequence of that, worth knowing before relying on it: the segment's
+ * "paging" tag, which is what makes key_binder's `when: paging` bindings fire,
+ * is set by moves the module makes - the page keys and the candidate keys. A
+ * move the host makes itself, with highlight_candidate, does not set it, and
+ * neither did the built-in selector's candidate moves. So a configuration that
+ * expects `-` and `,` to turn pages is driven by the keyboard; a host that
+ * moves the highlight from its own UI should treat those keys as input. (The C
+ * API's change_page does set the tag, so a host migrating off it is moving away
+ * from that behaviour rather than onto it.)
+ *
+ * Registration is against the session, and it stays with the session: changing
+ * schema rebuilds the processors but leaves the registration in place, and
+ * registering while the schema switcher is open files against the composing
+ * engine rather than the switcher, so the panel neither loses your registration
+ * nor asks you about its own schema list.
+ *
+ * The two halves of a registration are cleaned up differently, and the
+ * difference matters:
+ *
+ *   - The registration itself is the module's, and it needs no attention. It
+ * ends with its session, and a later session cannot inherit it.
+ *   - `user_data` is yours. The module stores it, hands it back to the
+ * resolver, and never frees it - a void* carries no deleter, so there is
+ * nothing for the module to call. If you allocated it, releasing it is
+ * required, not optional.
+ *
+ * Its safe window opens when the session ends: either when destroy_session is
+ * called, or when clear_resolver is. From that moment the module will not pass
+ * the pointer back - every resolver call is preceded by the check that the
+ * registration's session is still alive - so you may free it then, and should.
+ * Until then it must stay valid, because the module may still be asking:
+ * freeing before the session ends is a use-after-free.
+ *
+ * So there is no cleanup callback because there is nothing useful for one to
+ * do: the module cannot outlive-inform you of anything you do not already know,
+ * since destroy_session is your own call.
+ *
+ * clear_resolver is otherwise optional. It lets you stop being asked during a
+ * session's life, and it removes the id-reuse ambiguity below.
+ *
+ * clear_resolver finds a registration by session id, and an id is the session
+ * object's address: once a session is gone, its id can come back on a new one
+ * that has registered as well, and a late clear_resolver with the stale id then
+ * clears *that* session's registration - silently dropping it back to fixed
+ * pages. Clearing while the session is alive is unambiguous; that is the reason
+ * this call belongs before destroy_session rather than after.
+ */
+#ifndef RIME_VARPAGE_API_H_
+#define RIME_VARPAGE_API_H_
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "rime_api.h"  // for RimeCustomApi / RimeModule / RimeSessionId
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// A page: `length` candidates starting at absolute index `start`. Must satisfy
+// length > 0 and start <= index < start + length for the index it was resolved
+// for.
+typedef struct rime_varpage_page {
+  size_t start;
+  size_t length;
+} RimeVarPage;
+
+// Resolve the page holding the candidate at absolute index `index`.
+//
+// Called synchronously from inside key handling. Only ever called for indices
+// known to hold a candidate. Return true and fill `page`, or return false to
+// say "unknown" - the module then uses the built-in page_size arithmetic for
+// that keystroke. `user_data` is what was passed to set_resolver.
+//
+// The returned page must contain `index`, and pages must tile the candidate
+// list: the page after a given one begins where that one ends. Page Down relies
+// on that, because it asks about the candidate just past the current page and
+// carries the highlight's offset into whatever page comes back - an answer that
+// starts earlier would move the highlight backwards, so such an answer is
+// declined and the built-in arithmetic serves that keystroke instead. (Page Up
+// asks about the candidate just before the current page, which already forces
+// an answer that starts no later than that, so it needs no such check.)
+//
+// Do not call librime's mutating entry points from here (see the file comment);
+// reading candidates is fine.
+typedef bool (*RimeVarPageResolver)(void* user_data,
+                                    RimeSessionId session_id,
+                                    size_t index,
+                                    RimeVarPage* page);
+
+typedef struct rime_varpage_api_t {
+  int data_size;
+
+  // Install (or replace) the resolver for a session. Registration is what turns
+  // the module on for that session. Returns false if the session has no context
+  // yet, or if `resolver` is null.
+  bool (*set_resolver)(RimeSessionId session_id,
+                       RimeVarPageResolver resolver,
+                       void* user_data);
+
+  // Stop being asked for this session, without destroying it. The registration
+  // is the module's and would be dropped on its own, so this is for what you
+  // get immediately: from the moment it returns, the resolver is not called
+  // again, and `user_data` may be freed - see the file comment for who owns
+  // what.
+  //
+  // Works after the session is gone, so it is safe to call from a
+  // session-destroyed callback. Returns false if the session had no
+  // registration left - including when an earlier clear, or the automatic drop,
+  // removed it.
+  bool (*clear_resolver)(RimeSessionId session_id);
+} RimeVarPageApi;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // RIME_VARPAGE_API_H_
