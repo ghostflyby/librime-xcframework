@@ -123,7 +123,9 @@ bool RecordingResolver(void* user_data,
 }
 
 // Answers "unknown" for everything: the path a host takes when it declines a
-// request, which must leave the built-in arithmetic in charge.
+// request. A registered host is what makes a page action the host's to decide,
+// so a declined answer means the key does nothing at all - not that the module
+// reaches for its own arithmetic, which is a page turn the host never drew.
 bool UnknownResolver(void* user_data,
                      RimeSessionId session_id,
                      size_t index,
@@ -135,36 +137,115 @@ bool UnknownResolver(void* user_data,
   return false;
 }
 
-// A host whose answers overlap instead of tiling: the page it reports for the
-// index being turned to starts before the page the highlight is on. Every
-// answer contains the index it was asked about and stays inside the list, so it
-// breaks no rule the module enforces - and the module honours it, offset and
-// all, which lands the highlight behind where it started. That backwards move
-// is the host's layout talking, not a defect, and this resolver exists to pin
-// that distinction down.
+// A host whose pages overlap and whose answers therefore land the highlight
+// wherever its layout says - backwards included. The page after [0,2) is [4,9),
+// and the one after that lies behind it at [0,11), so a turn from index 6
+// carries an offset of 2 back to index 2. Every answer stays inside the
+// candidate list, which is the only thing the module checks.
 bool OverlappingResolver(void* user_data,
                          RimeSessionId session_id,
                          size_t index,
                          RimeVarPage* page) {
   (void)user_data;
   (void)session_id;
-  if (index < 6) {
+  if (index < 2) {
+    page->start = 0;
+    page->length = 2;
+  } else if (index < 9) {
     page->start = 4;
-    page->length = 4;
+    page->length = 5;
   } else {
     page->start = 0;
-    page->length = index + 2;
+    page->length = 11;
   }
   return true;
 }
 
+// A host whose answers do not contain the index they were asked about. The
+// module has no rule against that - it cannot see the layout the answer came
+// from - so the geometry is adopted as given, and the highlight's offset is
+// read as zero when it is not in the answered page. The landing is what makes
+// the difference visible: a module that subtracted without checking would take
+// the offset modulo the wrap and land past the end of the page instead.
+bool DetachedResolver(void* user_data,
+                      RimeSessionId session_id,
+                      size_t index,
+                      RimeVarPage* page) {
+  (void)user_data;
+  (void)session_id;
+  (void)index;
+  page->start = 4;
+  page->length = 4;
+  return true;
+}
+
+// A host that answers for the page the highlight is on but declines everything
+// past it. The first question of a page turn is answered, the second is not,
+// and the keystroke must still do nothing: an answer for one question is not a
+// licence to run the module's own arithmetic for the next.
+bool DecliningProbeResolver(void* user_data,
+                            RimeSessionId session_id,
+                            size_t index,
+                            RimeVarPage* page) {
+  (void)user_data;
+  (void)session_id;
+  if (index < 3) {
+    page->start = 0;
+    page->length = 3;
+    return true;
+  }
+  return false;
+}
+
+// A host that refuses to turn: asked about the boundary a page turn probes, it
+// answers with the page the highlight is already on. That is what makes a page
+// key a no-op, and the module has to take it as the answer - the page contains
+// no rule against being returned twice.
+//
+// `start`/`length` are what it answered last, so the fixture knows which probe
+// is a turn (the index just past its last answer, or just before it) and which
+// is an ordinary query.
+struct NoTurnState {
+  size_t start = 0;
+  size_t length = 0;
+  bool have = false;
+};
+
+bool NoTurnResolver(void* user_data,
+                    RimeSessionId session_id,
+                    size_t index,
+                    RimeVarPage* page) {
+  auto* state = static_cast<NoTurnState*>(user_data);
+  (void)session_id;
+  if (state->have) {
+    const size_t end = state->start + state->length;
+    if (index == end || (state->start > 0 && index == state->start - 1)) {
+      page->start = state->start;
+      page->length = state->length;
+      return true;
+    }
+  }
+  const size_t rows[][2] = {{0, 3}, {3, 4}, {7, 6}};
+  for (const auto& row : rows) {
+    if (index >= row[0] && index < row[0] + row[1]) {
+      page->start = row[0];
+      page->length = row[1];
+      state->start = row[0];
+      state->length = row[1];
+      state->have = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 // A host that answers with a page running past the end of the candidate list.
-// This is the one thing a resolver may not do, so the answer is declined and
-// the built-in arithmetic takes the keystroke. It counts its calls through
-// user_data for the same reason RecordingResolver does: the assertions around
-// it expect a fallback, and a fallback is also what a registration that never
-// reached this resolver at all would produce, so the count is what tells the
-// two apart.
+// This is the one thing a resolver may not do - the module cannot tell where
+// the list ends, so it would be placing the highlight beyond what exists - and
+// the answer is declined, which here means the key does nothing. It counts its
+// calls through user_data for the same reason RecordingResolver does: doing
+// nothing is also what a registration that never arrived would produce, so the
+// count is what tells the two apart.
 bool PastTheEndResolver(void* user_data,
                         RimeSessionId session_id,
                         size_t index,
@@ -175,6 +256,32 @@ bool PastTheEndResolver(void* user_data,
   (void)session_id;
   page->start = index;
   page->length = 1000000;
+  return true;
+}
+
+// The same violation, on the *second* question of a turn - the one that decides
+// where the highlight lands. The first answer is a well-formed page at the
+// start of the list, so the turn gets as far as asking about the index past it,
+// and the refusal has to stop the move there.
+//
+// This is the shape that makes the boundary check observable. When every answer
+// is out of range from the very first question, refusing and adopting it both
+// end in "the key does nothing" - an oversized page is read as the last page -
+// so an assertion written against that fixture cannot tell the two apart.
+// Adoption here would land the highlight on index 3.
+bool OutOfRangeProbeResolver(void* user_data,
+                             RimeSessionId session_id,
+                             size_t index,
+                             RimeVarPage* page) {
+  (void)user_data;
+  (void)session_id;
+  if (index < 3) {
+    page->start = 0;
+    page->length = 3;
+  } else {
+    page->start = index;
+    page->length = 1000000;
+  }
   return true;
 }
 
@@ -435,14 +542,29 @@ int main(int argc, char** argv) {
   Check(Property(session, "varpage.index").empty(),
         "still no property traffic: nothing is registered");
 
-  // -- A host that answers "unknown": still built-in, and it says so. --------
+  // -- A registered host that declines: the key does nothing. ----------------
+  // With a resolver registered the page is the host's to describe, so a
+  // declined answer means the composition stays where it is. Substituting the
+  // built-in move would be a page turn the host never asked for, and it is the
+  // failure this whole module exists to prevent: the built-in page is not the
+  // page the host drew. Note what shows the difference - the position, and the
+  // absence of any published decision, since "fallback" no longer names a
+  // reachable state.
   Check(varpage->set_resolver(session, &UnknownResolver, nullptr),
         "a resolver answering unknown is registered");
-  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
-  Check(Highlighted(session) == page_size,
-        "an unknown answer falls back to a page_size move");
-  Check(Property(session, "varpage.source") == "fallback",
-        "and the source property reports the built-in page");
+  {
+    const int before = Highlighted(session);
+    const std::string before_index = Property(session, "varpage.index");
+    const std::string before_source = Property(session, "varpage.source");
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    Check(Highlighted(session) == before,
+          "and the highlight does not move: a declined answer is not a licence "
+          "to page by the built-in arithmetic");
+    Check(Property(session, "varpage.index") == before_index &&
+              Property(session, "varpage.source") == before_source,
+          "and no decision is published, so the properties still describe the "
+          "last move that happened");
+  }
   Check(varpage->clear_resolver(session), "the unknown resolver is cleared");
 
   // -- A host with pages: the same keys now follow them. --------------------
@@ -653,57 +775,202 @@ int main(int argc, char** argv) {
     rime->destroy_session(short_session);
   }
 
-  // -- The host's geometry is honoured, backwards or not. -------------------
-  // The probe is the candidate just past the current page, and the offset is
-  // carried into whatever page comes back. This host answers with a page that
-  // starts *before* the one the highlight is on, so the turn lands behind where
-  // it started. That is the host's layout talking and the module carries it
-  // out; the check below is that the module does not substitute its own idea of
-  // where the turn should go. (A hit against the built-in arithmetic would land
-  // a whole page_size ahead instead, which is what makes the two
-  // distinguishable.)
+  // -- The host's geometry decides where a turn lands, backwards included. ---
+  // Pages here overlap and the third of them lies behind the second, so a turn
+  // from index 6 carries an offset of 2 back to index 2. The built-in
+  // arithmetic would have moved it to 11 instead, which is what makes the two
+  // outcomes distinguishable. Nothing about this answer is malformed: it stays
+  // inside the candidate list, and the module has no rule about how a host lays
+  // its pages out.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
   Check(varpage->set_resolver(session, &OverlappingResolver, nullptr),
         "a resolver whose pages overlap is registered");
-  rime->process_key(session, 0xFF56, 0);
-  const int before_overlapping_turn = Highlighted(session);
-  Check(before_overlapping_turn > 1,
-        "the highlight has room behind it before the overlapping turn");
   Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
-  std::printf("       (overlapping answer: %d -> %d, source=%s)\n",
-              before_overlapping_turn, Highlighted(session),
-              Property(session, "varpage.source").c_str());
-  Check(Highlighted(session) < before_overlapping_turn,
-        "the highlight went backwards, because that is where the host's page "
-        "put it");
-  Check(
-      Property(session, "varpage.source") == "client",
-      "and the source reports the host's page was used, not the built-in one");
+  Check(Highlighted(session) == 4, "the first turn lands on the host's page");
+  // Two candidate moves put the highlight two slots into the page [4,9).
+  rime->process_key(session, 0xFF54 /* XK_Down */, 0);
+  rime->process_key(session, 0xFF54, 0);
+  Check(Highlighted(session) == 6, "and it can be moved within the page");
+  {
+    const int before = Highlighted(session);
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    std::printf("       (overlapping answer: %d -> %d, source=%s)\n", before,
+                Highlighted(session),
+                Property(session, "varpage.source").c_str());
+    Check(Highlighted(session) == 2,
+          "the highlight went backwards, because that is where the host's page "
+          "put it");
+    Check(Property(session, "varpage.source") == "client",
+          "and the source reports the host's page was used, not the built-in "
+          "one");
+  }
 
-  // -- An answer past the candidate list is the one thing declined. ---------
-  // The module does not police how pages relate to each other, but it does keep
-  // the highlight inside the candidate list: a page whose last slot holds no
-  // candidate is refused, and the keystroke falls back to the built-in
-  // arithmetic. This answer is otherwise well-formed - it contains the index it
-  // was asked about - so the boundary is the only reason to refuse it.
+  // -- An answer need not contain the index it was asked about. --------------
+  // The module cannot see the layout an answer came from, so it takes the
+  // geometry as given. The offset is then read as zero when the highlight is
+  // not inside the answered page, rather than subtracted blind: the highlight
+  // is at 0 and the page starts at 4, so an unguarded subtraction would wrap
+  // and land on 7 instead of 4.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(varpage->set_resolver(session, &DetachedResolver, nullptr),
+        "a resolver answering with a page that does not hold the highlight is "
+        "registered");
+  Check(Highlighted(session) == 0, "the highlight starts before the page");
+  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+  std::printf("       (detached answer: 0 -> %d)\n", Highlighted(session));
+  Check(Highlighted(session) == 4,
+        "and it lands at the start of the answered page, not past it");
+
+  // -- A page key the host answers with its own page is a no-op. -------------
+  // This is what makes "do not turn" expressible: asked about the index a turn
+  // probes, the host answers the page already being viewed, and the offset
+  // carried into it lands the highlight back where it was. The source property
+  // is what proves the answer was adopted rather than discarded - a declined
+  // answer also leaves the highlight in place, but publishes nothing.
+  {
+    NoTurnState state;
+    rime->clear_composition(session);
+    rime->simulate_key_sequence(session, input);
+    Check(varpage->set_resolver(session, &NoTurnResolver, &state),
+          "a resolver that declines to turn is registered");
+    Check(Highlighted(session) == 0, "the highlight starts on the first page");
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    std::printf("       (no-turn Page_Down: 0 -> %d, source=%s)\n",
+                Highlighted(session),
+                Property(session, "varpage.source").c_str());
+    Check(Highlighted(session) == 0,
+          "and it did not move: the host answered with the page already shown");
+    Check(Property(session, "varpage.source") == "client",
+          "and the answer was adopted, not declined");
+
+    // Page Up the same way, from the middle of the second page.
+    rime->clear_composition(session);
+    rime->simulate_key_sequence(session, input);
+    state.have = false;
+    for (int i = 0; i < 3; ++i)
+      rime->process_key(session, 0xFF54 /* XK_Down */, 0);
+    Check(Highlighted(session) == 3, "the highlight is inside the second page");
+    Check(rime->process_key(session, 0xFF55 /* XK_Prior */, 0),
+          "Page_Up is consumed");
+    std::printf("       (no-turn Page_Up: 3 -> %d, source=%s)\n",
+                Highlighted(session),
+                Property(session, "varpage.source").c_str());
+    Check(Highlighted(session) == 3, "and it did not move either");
+    Check(Property(session, "varpage.source") == "client",
+          "because the host's own page was used for the turn");
+
+    Check(varpage->clear_resolver(session), "the no-turn resolver is cleared");
+  }
+
+  // A declined answer stops the other two page actions the same way. Each is
+  // driven from a fresh composition, so the properties are empty and publishing
+  // anything at all would show up.
+  {
+    rime->clear_composition(session);
+    rime->simulate_key_sequence(session, input);
+    Check(varpage->set_resolver(session, &UnknownResolver, nullptr),
+          "the declining resolver is registered for the remaining actions");
+    const int before = Highlighted(session);
+    Check(Property(session, "varpage.source").empty(),
+          "and the composition has published nothing yet");
+
+    Check(rime->process_key(session, 0xFF55 /* XK_Prior */, 0),
+          "Page_Up is consumed");
+    Check(Highlighted(session) == before,
+          "and it does not move either: the decline is not a PageUp-specific "
+          "rule");
+    Check(Property(session, "varpage.source").empty(),
+          "and nothing is published for it");
+
+    // A select key: the slot is resolved against the page the highlight is on,
+    // so a declined answer means there is no page to take a slot from.
+    //
+    // Drain first. Earlier phases leave committed text in the session - the '0'
+    // probe above falls through to the editor, which commits the raw input -
+    // and commits accumulate until something takes them. Without this the check
+    // below would read that leftover and report a selection that never
+    // happened.
+    TakeCommit(session);
+    Check(rime->process_key(session, '3', 0), "a select key is consumed");
+    Check(TakeCommit(session).empty(),
+          "and it selects nothing, rather than falling back to the built-in "
+          "page's slots");
+    Check(Highlighted(session) == before, "and the composition is untouched");
+    Check(varpage->clear_resolver(session),
+          "the declining resolver is cleared again");
+  }
+
+  // -- An answer past the candidate list does nothing. -----------------------
+  // This is the one thing a resolver may not do, and the module cannot work
+  // around it: it has no way to know where a host meant the list to end, so
+  // running the built-in arithmetic instead would turn a page the host never
+  // drew. The key is consumed and nothing moves.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
   int past_end_calls = 0;
   Check(varpage->set_resolver(session, &PastTheEndResolver, &past_end_calls),
         "a resolver answering past the end is registered");
-  const int before_past_end = Highlighted(session);
-  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
-  std::printf("       (past-the-end answer: %d -> %d, source=%s, calls=%d)\n",
-              before_past_end, Highlighted(session),
-              Property(session, "varpage.source").c_str(), past_end_calls);
-  Check(past_end_calls > 0,
-        "the answer was actually consulted, so the fallback below is the "
-        "boundary being enforced, not a registration that never arrived");
-  Check(Highlighted(session) == before_past_end + page_size,
-        "the answer was refused and the built-in page_size move applied");
-  Check(Property(session, "varpage.source") == "fallback",
-        "and the source reports the built-in page was used");
+  {
+    const int before = Highlighted(session);
+    const std::string before_index = Property(session, "varpage.index");
+    const std::string before_source = Property(session, "varpage.source");
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    std::printf("       (past-the-end answer: %d -> %d, source=%s, calls=%d)\n",
+                before, Highlighted(session),
+                Property(session, "varpage.source").c_str(), past_end_calls);
+    Check(past_end_calls > 0,
+          "the answer was actually consulted, so doing nothing below is the "
+          "boundary being enforced, not a registration that never arrived");
+    Check(Highlighted(session) == before,
+          "and the highlight did not move: an out-of-range answer is not a "
+          "licence to page by the built-in arithmetic");
+    Check(Property(session, "varpage.index") == before_index &&
+              Property(session, "varpage.source") == before_source,
+          "and no decision is published");
+  }
+
+  // A turn that is answered for its first question and declined for its second
+  // does nothing as well. An answer for one question is not a licence to run
+  // the module's own arithmetic for the next one.
+  //
+  // Started from a fresh composition on purpose: ending one clears the
+  // properties, so the source staying empty is what shows no decision was
+  // published here. A module that fell back or moved would have written one.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(varpage->set_resolver(session, &DecliningProbeResolver, nullptr),
+        "a resolver that answers the current page but declines the probe is "
+        "registered");
+  {
+    const int before = Highlighted(session);
+    Check(Property(session, "varpage.source").empty(),
+          "no decision has been published for this composition yet");
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    Check(Highlighted(session) == before,
+          "and the keystroke does nothing: half an answer is not a turn");
+    Check(Property(session, "varpage.source").empty(),
+          "and nothing is published for it");
+  }
+
+  // The boundary again, in the shape where adopting the answer would be
+  // visible: the first page is well formed and the answer for the probe runs
+  // past the list. Adoption would carry the highlight to index 3, so staying at
+  // 0 is what shows the answer was refused rather than used.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(varpage->set_resolver(session, &OutOfRangeProbeResolver, nullptr),
+        "a resolver whose boundary answer runs past the list is registered");
+  {
+    const int before = Highlighted(session);
+    Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+    std::printf("       (out-of-range probe: %d -> %d)\n", before,
+                Highlighted(session));
+    Check(Highlighted(session) == before,
+          "and the highlight stays at the start of the list: the out-of-range "
+          "answer was refused, not adopted");
+  }
 
   // -- Registration outlives another engine becoming active. ----------------
   // Opening the schema switcher makes the session's active engine the switcher,
