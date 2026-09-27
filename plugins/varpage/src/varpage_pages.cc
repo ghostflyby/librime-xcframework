@@ -5,6 +5,7 @@
 #include "varpage_pages.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string>
@@ -257,7 +258,13 @@ bool ResolvePage(const Schema* schema,
   const Composition& comp = ctx->composition();
   if (comp.empty() || !comp.back().menu)
     return false;
-  if (comp.back().menu->Prepare(index + 1) <= index)
+  // By shared_ptr, and before the resolver runs: a host that breaks the
+  // no-mutation rule rebuilds the composition, and the boundary check below
+  // needs the menu *after* that call. Holding it keeps the list alive and the
+  // second Prepare off a composition that may no longer be there. NextPage
+  // hardens the same way for the same reason.
+  const an<Menu> menu = comp.back().menu;
+  if (menu->Prepare(index + 1) <= index)
     return false;
 
   if (allow_host) {
@@ -266,10 +273,25 @@ bool ResolvePage(const Schema* schema,
       RimeVarPage answer = {0, 0};
       if (entry.resolver(entry.user_data, entry.session_id, index, &answer)) {
         const PageGeometry resolved{answer.start, answer.length};
-        // A page has to contain the index it was asked about, and be non-empty:
-        // an answer that fails either test is not usable, and the built-in page
-        // stands in for it. varpage.source reports the downgrade.
-        if (resolved.length > 0 && resolved.Contains(index)) {
+        // Three requirements, and only three: the page has to be non-empty,
+        // contain the index it was asked about, and lie inside the candidate
+        // list - its last slot has to hold a candidate. How the pages relate to
+        // each other is otherwise the host's business: they may tile, or
+        // overlap, and the offset the module carries across a turn lands the
+        // highlight wherever that geometry says, backwards included.
+        //
+        // An answer that fails any of them is not usable, and the built-in page
+        // stands in for it; varpage.source reports the downgrade.
+        //
+        // The boundary is the one failure the module cannot work around, and it
+        // is checked by asking for the page's last slot rather than by
+        // arithmetic on a total: the candidate list has no known length until
+        // something asks for it. The sum is guarded first, because a length
+        // that wraps size_t describes no page of any list.
+        const bool fits = resolved.length <=
+                          std::numeric_limits<size_t>::max() - resolved.start;
+        if (resolved.length > 0 && resolved.Contains(index) && fits &&
+            menu->Prepare(resolved.end()) >= resolved.end()) {
           *page = resolved;
           *from_host = true;
           return true;
@@ -312,11 +334,10 @@ bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
   const an<Menu> menu = comp.back().menu;
   const size_t selected = comp.back().selected_index;
 
-  // The two page models are never mixed within one keystroke: the offset
-  // carried across a turn is measured inside the page it came from, so landing
-  // in a page from the other model at a foreign offset could move the highlight
-  // backwards. When the host cannot place the page being turned to, the
-  // built-in arithmetic serves the whole keystroke instead.
+  // The two page models are never mixed within one keystroke, so the offset
+  // carried across a turn is always measured in the same geometry it lands in.
+  // When the host cannot place the page being turned to, the built-in
+  // arithmetic serves the whole keystroke instead.
   PageGeometry current;
   bool from_host = false;
   if (ResolvePage(schema, ctx, selected, &current, &from_host, allow_host) &&
@@ -334,14 +355,16 @@ bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
 
     PageGeometry next;
     bool next_from_host = false;
-    // The page after this one has to begin where this one ends. That tiling is
-    // what makes the turn move forward, because the offset measured in
-    // `current` is carried into `next`: an answer that merely *contains* the
-    // probe index may start before it, and the highlight would land behind
-    // where it started. Such an answer is declined, and the built-in arithmetic
-    // serves instead.
+    // The page the turn lands in is the one holding the candidate just past
+    // this page, and its geometry decides where inside it the highlight goes:
+    // the offset measured in `current` is carried over, bounded by the target
+    // page's own length. Nothing is required of how the two pages relate -
+    // `next` may begin before `current` ends, or after the gap that ends it,
+    // and the highlight moves wherever that puts it. The one thing the answer
+    // may not do is reach past the last candidate, which ResolvePage has
+    // checked.
     if (ResolvePage(schema, ctx, probe, &next, &next_from_host, allow_host) &&
-        next_from_host && next.start == probe) {
+        next_from_host) {
       const size_t offset = std::min(selected - current.start, next.length - 1);
       PublishDecision(ctx, HighlightAndTag(ctx, next.start + offset), true);
       return true;
@@ -380,10 +403,11 @@ bool PreviousPage(const Schema* schema, Context* ctx, const bool allow_host) {
       return true;
     }
 
-    // No tiling guard is needed on this side. The probe is the candidate just
-    // before this page, whose answer must contain it, which already forces
-    // previous.start <= current.start - 1; the target is therefore at most
-    // selected - 1 and cannot move forward.
+    // No guard is needed on this side. The probe is the candidate just before
+    // this page, and an answer about it has to contain it, which forces
+    // previous.start <= current.start - 1; carried into the offset, that puts
+    // the target at most at selected - 1. However the host lays its pages out,
+    // a Page Up cannot move the highlight forward.
     PageGeometry previous;
     bool previous_from_host = false;
     if (ResolvePage(schema, ctx, current.start - 1, &previous,

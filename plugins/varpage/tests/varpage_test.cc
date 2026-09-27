@@ -137,14 +137,15 @@ bool UnknownResolver(void* user_data,
 
 // A host whose answers overlap instead of tiling: the page it reports for the
 // index being turned to starts before the page the highlight is on. Every
-// answer contains the index it was asked about, so nothing about a single
-// answer looks wrong - the defect is only visible when the offset is carried
-// across, which lands the highlight behind where it started. This is the shape
-// the contract's tiling requirement exists to exclude.
-bool UntiledResolver(void* user_data,
-                     RimeSessionId session_id,
-                     size_t index,
-                     RimeVarPage* page) {
+// answer contains the index it was asked about and stays inside the list, so it
+// breaks no rule the module enforces - and the module honours it, offset and
+// all, which lands the highlight behind where it started. That backwards move
+// is the host's layout talking, not a defect, and this resolver exists to pin
+// that distinction down.
+bool OverlappingResolver(void* user_data,
+                         RimeSessionId session_id,
+                         size_t index,
+                         RimeVarPage* page) {
   (void)user_data;
   (void)session_id;
   if (index < 6) {
@@ -154,6 +155,26 @@ bool UntiledResolver(void* user_data,
     page->start = 0;
     page->length = index + 2;
   }
+  return true;
+}
+
+// A host that answers with a page running past the end of the candidate list.
+// This is the one thing a resolver may not do, so the answer is declined and
+// the built-in arithmetic takes the keystroke. It counts its calls through
+// user_data for the same reason RecordingResolver does: the assertions around
+// it expect a fallback, and a fallback is also what a registration that never
+// reached this resolver at all would produce, so the count is what tells the
+// two apart.
+bool PastTheEndResolver(void* user_data,
+                        RimeSessionId session_id,
+                        size_t index,
+                        RimeVarPage* page) {
+  auto* calls = static_cast<int*>(user_data);
+  if (calls)
+    ++*calls;
+  (void)session_id;
+  page->start = index;
+  page->length = 1000000;
   return true;
 }
 
@@ -632,32 +653,55 @@ int main(int argc, char** argv) {
     rime->destroy_session(short_session);
   }
 
-  // -- A host answer that does not tile is declined. ------------------------
+  // -- The host's geometry is honoured, backwards or not. -------------------
   // The probe is the candidate just past the current page, and the offset is
-  // carried into whatever page comes back. An answer that contains that index
-  // but starts earlier would move the highlight backwards. Move the highlight
-  // with the built-in arithmetic first, so it has somewhere to move back to if
-  // the guard is missing.
+  // carried into whatever page comes back. This host answers with a page that
+  // starts *before* the one the highlight is on, so the turn lands behind where
+  // it started. That is the host's layout talking and the module carries it
+  // out; the check below is that the module does not substitute its own idea of
+  // where the turn should go. (A hit against the built-in arithmetic would land
+  // a whole page_size ahead instead, which is what makes the two
+  // distinguishable.)
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
-  Check(varpage->set_resolver(session, &UntiledResolver, nullptr),
-        "an untiled resolver is registered");
+  Check(varpage->set_resolver(session, &OverlappingResolver, nullptr),
+        "a resolver whose pages overlap is registered");
   rime->process_key(session, 0xFF56, 0);
-  const int before_untiled_turn = Highlighted(session);
-  Check(before_untiled_turn > 1,
-        "the highlight has room behind it before the untiled turn");
+  const int before_overlapping_turn = Highlighted(session);
+  Check(before_overlapping_turn > 1,
+        "the highlight has room behind it before the overlapping turn");
   Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
-  std::printf("       (untiled answer: %d -> %d, source=%s)\n",
-              before_untiled_turn, Highlighted(session),
+  std::printf("       (overlapping answer: %d -> %d, source=%s)\n",
+              before_overlapping_turn, Highlighted(session),
               Property(session, "varpage.source").c_str());
-  Check(Highlighted(session) >= before_untiled_turn,
-        "the highlight did not move backwards on an untiled answer");
-  // The keystroke has to actually fall back, not merely be consumed: a
-  // do-nothing implementation would satisfy "did not move backwards" too. The
-  // fallback is the built-in move, so the highlight lands a whole page further
-  // on.
-  Check(Highlighted(session) == before_untiled_turn + page_size,
-        "and it fell back to the built-in page_size move");
+  Check(Highlighted(session) < before_overlapping_turn,
+        "the highlight went backwards, because that is where the host's page "
+        "put it");
+  Check(
+      Property(session, "varpage.source") == "client",
+      "and the source reports the host's page was used, not the built-in one");
+
+  // -- An answer past the candidate list is the one thing declined. ---------
+  // The module does not police how pages relate to each other, but it does keep
+  // the highlight inside the candidate list: a page whose last slot holds no
+  // candidate is refused, and the keystroke falls back to the built-in
+  // arithmetic. This answer is otherwise well-formed - it contains the index it
+  // was asked about - so the boundary is the only reason to refuse it.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  int past_end_calls = 0;
+  Check(varpage->set_resolver(session, &PastTheEndResolver, &past_end_calls),
+        "a resolver answering past the end is registered");
+  const int before_past_end = Highlighted(session);
+  Check(rime->process_key(session, 0xFF56, 0), "Page_Down is consumed");
+  std::printf("       (past-the-end answer: %d -> %d, source=%s, calls=%d)\n",
+              before_past_end, Highlighted(session),
+              Property(session, "varpage.source").c_str(), past_end_calls);
+  Check(past_end_calls > 0,
+        "the answer was actually consulted, so the fallback below is the "
+        "boundary being enforced, not a registration that never arrived");
+  Check(Highlighted(session) == before_past_end + page_size,
+        "the answer was refused and the built-in page_size move applied");
   Check(Property(session, "varpage.source") == "fallback",
         "and the source reports the built-in page was used");
 

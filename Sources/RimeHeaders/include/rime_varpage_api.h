@@ -206,8 +206,8 @@ extern "C" {
 #endif
 
 // A page: `length` candidates starting at absolute index `start`. Must satisfy
-// length > 0 and start <= index < start + length for the index it was resolved
-// for.
+// length > 0, start <= index < start + length for the index it was resolved
+// for, and start + length <= the number of candidates.
 typedef struct rime_varpage_page {
   size_t start;
   size_t length;
@@ -220,14 +220,26 @@ typedef struct rime_varpage_page {
 // say "unknown" - the module then uses the built-in page_size arithmetic for
 // that keystroke. `user_data` is what was passed to set_resolver.
 //
-// The returned page must contain `index`, and pages must tile the candidate
-// list: the page after a given one begins where that one ends. Page Down relies
-// on that, because it asks about the candidate just past the current page and
-// carries the highlight's offset into whatever page comes back - an answer that
-// starts earlier would move the highlight backwards, so such an answer is
-// declined and the built-in arithmetic serves that keystroke instead. (Page Up
-// asks about the candidate just before the current page, which already forces
-// an answer that starts no later than that, so it needs no such check.)
+// The returned page must contain `index`, and it must lie inside the candidate
+// list: start + length may not reach past the last candidate. Those are the
+// only two requirements - the module does not ask pages to relate to one
+// another in any particular way. They may tile or overlap, and a page turn
+// lands wherever that geometry puts it: the highlight's offset is carried into
+// the page the turn resolves to, so an answer that begins before the page it
+// turns from moves the highlight backwards. That is the host's call, and the
+// module honours it.
+//
+// One consequence of probing by fixed arithmetic rather than by search: a page
+// turn asks about the index just past the current page (just before it, for
+// Page Up), so an index no answer contains cannot be crossed. The host has no
+// page to name there and returns false, and that keystroke falls back to the
+// built-in arithmetic - the one thing that is wrong for a variable-length
+// layout. So answer for every index you want the keyboard to navigate across: a
+// gap in the layout is a gap the page keys cannot cross.
+//
+// An answer that fails either requirement is declined and the built-in
+// page_size arithmetic serves that keystroke instead; varpage.source reports
+// which model was used.
 //
 // Do not call librime's mutating entry points from here (see the file comment);
 // reading candidates is fine.
