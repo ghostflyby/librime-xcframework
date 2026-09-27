@@ -389,9 +389,29 @@ index, cleared when the composition ends) and `varpage.source` (`client` or
 any Lua script read the same answer.
 
 `menu.*` in `get_context` is unaffected and still describes the built-in window;
-it is not the host's page. `menu.page_size` doubles as the fallback page length
-and as the cap on `select_labels`, so a host that wants a full set of labels
-should set it to the largest page it can display.
+it is not the host's page. `menu.page_size` is the fallback page length.
+
+Its `select_labels`, however, is a trap for a variable-length layout, and the
+module's header documents the way around it. librime fills that array from
+`menu/alternative_select_labels` but always with exactly `menu.page_size`
+entries, and only when the configured list is at least that long — a page longer
+than `page_size` cannot be labelled through it, and a list shorter than
+`page_size` yields no array at all rather than a short one. The array's lifetime
+is the same number: `free_context` releases exactly `menu.page_size` entries, so
+a host must not write `menu.page_size` in between (out-of-bounds delete), must
+not call `get_context` twice on one struct (the first allocation is dropped),
+and must not walk the array looking for a NULL terminator (there is none).
+
+A host that needs labels for pages of its own length should read the
+configuration instead — `schema_open(schema_id, &config)` plus
+`config_list_size` and `config_get_cstring("menu/alternative_select_labels/@N")`.
+That is the same deployed, patch-merged configuration the engine itself reads,
+so it agrees with `select_labels` within `page_size` and also answers for the
+slots beyond it. Render by the engine's rule — a page shows labels only if the
+list is at least as long as that page, indexed by slot. The module deliberately
+publishes no labels of its own: the configuration already holds them, and a
+second copy inside the module would be one more thing to keep in step with the
+host's layout.
 
 Two upstream behaviors matter for this arrangement:
 
