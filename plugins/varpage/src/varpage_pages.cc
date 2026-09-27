@@ -25,7 +25,6 @@ constexpr char kIndexProperty[] = "varpage.index";
 constexpr char kSourceProperty[] = "varpage.source";
 
 constexpr char kSourceClient[] = "client";
-constexpr char kSourceFallback[] = "fallback";
 
 struct Entry {
   RimeSessionId session_id = 0;
@@ -212,10 +211,12 @@ void PublishIndex(Context* ctx) {
 }
 
 // Publishes the outcome of a page action. `from_host` says whether the host's
-// pages determined this keystroke - that is, whether the resolver answered for
-// the position the highlight was on - which is the question a host debugging
-// its own layout is asking. Only page actions write the source, so it always
-// names the model behind the most recent page move.
+// answer determined this keystroke. Only page actions write the source, so it
+// names the model behind the most recent one.
+//
+// A keystroke whose answer the host declined publishes nothing at all: the
+// properties then still describe the last decision that was actually taken,
+// rather than claiming a move that did not happen.
 void PublishDecision(Context* ctx, const size_t landed, const bool from_host) {
   // Nothing is published for a session that never registered: the properties
   // are this module's answer to "what did my resolver decide", and a host that
@@ -223,8 +224,8 @@ void PublishDecision(Context* ctx, const size_t landed, const bool from_host) {
   if (!Registered(ctx))
     return;
   WriteProperty(ctx, kIndexProperty, std::to_string(landed));
-  WriteProperty(ctx, kSourceProperty,
-                from_host ? kSourceClient : kSourceFallback);
+  if (from_host)
+    WriteProperty(ctx, kSourceProperty, kSourceClient);
 }
 
 // Moves the highlight and tags the segment. Returns the index the engine
@@ -244,64 +245,95 @@ size_t HighlightAndTag(Context* ctx, const size_t index) {
   return comp.back().selected_index;
 }
 
-// The page holding `index`. Fails only when there is no candidate list or no
-// candidate at that index; otherwise it always answers, falling back to the
-// built-in page when the host has nothing to say. `from_host` reports which of
-// the two answered.
-bool ResolvePage(const Schema* schema,
-                 Context* ctx,
-                 const size_t index,
-                 PageGeometry* page,
-                 bool* from_host,
-                 const bool allow_host) {
-  *from_host = false;
+// Where a page geometry came from. The middle case is the one the callers act
+// on: a host is registered and was asked, but its answer cannot be used, so the
+// keystroke does nothing. It must not reach for arithmetic the host's layout
+// would contradict - that is the failure this module exists to prevent.
+enum class PageSource { kHost, kBuiltIn, kDeclined };
+
+struct ResolvedPage {
+  PageGeometry page;
+  PageSource source = PageSource::kBuiltIn;
+};
+
+// The page holding `index`, and where that page came from.
+//
+// A host is asked whenever this context has a registration. Its answer is
+// adopted as long as it lies inside the candidate list, which is the only thing
+// checked and the only thing that can be checked: the module cannot know which
+// pages the host's layout has. Everything else about the answer is the host's
+// business - whether pages overlap or tile, whether the answer contains the
+// index it was asked about, and therefore where in the page the highlight
+// lands.
+//
+// The boundary is enforced by asking the menu for the page's last slot rather
+// than by arithmetic on a total, because the candidate list has no known length
+// until something asks for it. `length == 0` is declined as well: it cannot
+// place a highlight. Both are declines rather than reasons to fall back, so a
+// host's layout is never silently replaced by one it did not draw.
+ResolvedPage ResolvePage(const Schema* schema,
+                         Context* ctx,
+                         const size_t index,
+                         const bool allow_host) {
+  ResolvedPage result;
   const Composition& comp = ctx->composition();
   if (comp.empty() || !comp.back().menu)
-    return false;
+    return result;
   // By shared_ptr, and before the resolver runs: a host that breaks the
   // no-mutation rule rebuilds the composition, and the boundary check below
   // needs the menu *after* that call. Holding it keeps the list alive and the
-  // second Prepare off a composition that may no longer be there. NextPage
-  // hardens the same way for the same reason.
+  // second Prepare off a composition that may no longer be there.
   const an<Menu> menu = comp.back().menu;
-  if (menu->Prepare(index + 1) <= index)
-    return false;
 
-  if (allow_host) {
-    Entry entry;
-    if (Lookup(ctx, &entry) && entry.resolver) {
-      RimeVarPage answer = {0, 0};
-      if (entry.resolver(entry.user_data, entry.session_id, index, &answer)) {
-        const PageGeometry resolved{answer.start, answer.length};
-        // Three requirements, and only three: the page has to be non-empty,
-        // contain the index it was asked about, and lie inside the candidate
-        // list - its last slot has to hold a candidate. How the pages relate to
-        // each other is otherwise the host's business: they may tile, or
-        // overlap, and the offset the module carries across a turn lands the
-        // highlight wherever that geometry says, backwards included.
-        //
-        // An answer that fails any of them is not usable, and the built-in page
-        // stands in for it; varpage.source reports the downgrade.
-        //
-        // The boundary is the one failure the module cannot work around, and it
-        // is checked by asking for the page's last slot rather than by
-        // arithmetic on a total: the candidate list has no known length until
-        // something asks for it. The sum is guarded first, because a length
-        // that wraps size_t describes no page of any list.
-        const bool fits = resolved.length <=
-                          std::numeric_limits<size_t>::max() - resolved.start;
-        if (resolved.length > 0 && resolved.Contains(index) && fits &&
-            menu->Prepare(resolved.end()) >= resolved.end()) {
-          *page = resolved;
-          *from_host = true;
-          return true;
-        }
-      }
-    }
+  Entry entry;
+  const bool host = allow_host && Lookup(ctx, &entry) && entry.resolver;
+
+  // No candidate at `index` means the question cannot be asked at all. The
+  // callers' own candidate checks have usually settled this already.
+  if (menu->Prepare(index + 1) <= index) {
+    result.source = host ? PageSource::kDeclined : PageSource::kBuiltIn;
+    return result;
   }
 
-  *page = FixedPage(schema, index);
-  return true;
+  if (host) {
+    RimeVarPage answer = {0, 0};
+    if (entry.resolver(entry.user_data, entry.session_id, index, &answer)) {
+      const PageGeometry resolved{answer.start, answer.length};
+      const bool fits = resolved.length <=
+                        std::numeric_limits<size_t>::max() - resolved.start;
+      if (resolved.length > 0 && fits &&
+          menu->Prepare(resolved.end()) >= resolved.end()) {
+        result.page = resolved;
+        result.source = PageSource::kHost;
+        return result;
+      }
+    }
+    result.source = PageSource::kDeclined;
+    return result;
+  }
+
+  result.page = FixedPage(schema, index);
+  return result;
+}
+
+// How far into its page the highlight sits, for a page that starts at or before
+// it. A page beginning after the highlight has no offset to carry, and the
+// subtraction would wrap size_t if it were attempted - an answer is no longer
+// required to contain the index it was asked about, so the two can be
+// unrelated. Clamping to zero lands the turn on that page's first slot.
+size_t OffsetIn(const size_t selected, const PageGeometry& page) {
+  return selected >= page.start ? selected - page.start : 0;
+}
+
+// Where inside `page` a turn lands: the offset the highlight had in the page it
+// came from, clamped to this page's length. The offset comes from the source
+// page - measuring it against the target would use an origin the highlight was
+// never placed by, and would land it somewhere neither page describes.
+//
+// `page` is a host answer that got this far, so its length is positive:
+// ResolvePage refuses an empty page before it can return kHost.
+size_t LandingTarget(const size_t offset, const PageGeometry& page) {
+  return page.start + std::min(offset, page.length - 1);
 }
 
 }  // namespace
@@ -334,43 +366,43 @@ bool NextPage(const Schema* schema, Context* ctx, const bool allow_host) {
   const an<Menu> menu = comp.back().menu;
   const size_t selected = comp.back().selected_index;
 
-  // The two page models are never mixed within one keystroke, so the offset
-  // carried across a turn is always measured in the same geometry it lands in.
-  // When the host cannot place the page being turned to, the built-in
-  // arithmetic serves the whole keystroke instead.
-  PageGeometry current;
-  bool from_host = false;
-  if (ResolvePage(schema, ctx, selected, &current, &from_host, allow_host) &&
-      from_host) {
-    const size_t probe = current.end();
+  const ResolvedPage current = ResolvePage(schema, ctx, selected, allow_host);
+  if (current.source == PageSource::kHost) {
+    const size_t probe = current.page.end();
     if (menu->Prepare(probe + 1) <= probe) {
-      // Nothing where the next page would begin, so this is the last page.
-      if (schema && schema->page_down_cycle()) {
-        PublishDecision(ctx, HighlightAndTag(ctx, 0), from_host);
-      }
-      // Without page_down_cycle the key is consumed without moving, so page
-      // down is not delivered to the application.
+      // Nothing where the next page would begin, so this is the last page. With
+      // page_down_cycle the list wraps, as it does in the built-in selector;
+      // without it the key is consumed without moving, so page down is not
+      // delivered to the application.
+      if (schema && schema->page_down_cycle())
+        PublishDecision(ctx, HighlightAndTag(ctx, 0), true);
       return true;
     }
 
-    PageGeometry next;
-    bool next_from_host = false;
-    // The page the turn lands in is the one holding the candidate just past
-    // this page, and its geometry decides where inside it the highlight goes:
-    // the offset measured in `current` is carried over, bounded by the target
-    // page's own length. Nothing is required of how the two pages relate -
-    // `next` may begin before `current` ends, or after the gap that ends it,
-    // and the highlight moves wherever that puts it. The one thing the answer
-    // may not do is reach past the last candidate, which ResolvePage has
-    // checked.
-    if (ResolvePage(schema, ctx, probe, &next, &next_from_host, allow_host) &&
-        next_from_host) {
-      const size_t offset = std::min(selected - current.start, next.length - 1);
-      PublishDecision(ctx, HighlightAndTag(ctx, next.start + offset), true);
-      return true;
-    }
+    // The page being turned to is whichever one holds the candidate just past
+    // this page; the highlight's offset, measured in the page it is leaving, is
+    // carried into it and clamped to that page's length. Nothing is required of
+    // how the two pages relate: this one may begin before it, or after the gap
+    // that ends it, and the target may land behind the highlight or not move it
+    // at all. Whatever the answer describes is where the keyboard goes.
+    const ResolvedPage next = ResolvePage(schema, ctx, probe, allow_host);
+    if (next.source == PageSource::kHost)
+      PublishDecision(
+          ctx,
+          HighlightAndTag(
+              ctx, LandingTarget(OffsetIn(selected, current.page), next.page)),
+          true);
+    // A declined answer leaves the composition where it is. There is no
+    // arithmetic to fall back to with a host registered: the built-in page is
+    // not what this host drew, and moving by it would be a page turn the user
+    // never asked for.
+    return true;
   }
+  if (current.source == PageSource::kDeclined)
+    return true;
 
+  // No host registered: the built-in arithmetic, which is what a drop-in
+  // replacement owes a session that never registered.
   const size_t page_size = PageSize(schema);
   if (const size_t probe = selected / page_size * page_size + page_size;
       menu->Prepare(probe + 1) <= probe) {
@@ -391,36 +423,34 @@ bool PreviousPage(const Schema* schema, Context* ctx, const bool allow_host) {
     return false;
   const size_t selected = comp.back().selected_index;
 
-  PageGeometry current;
-  bool from_host = false;
-  if (comp.back().menu &&
-      ResolvePage(schema, ctx, selected, &current, &from_host, allow_host) &&
-      from_host) {
-    if (current.start == 0) {
+  const ResolvedPage current = ResolvePage(schema, ctx, selected, allow_host);
+  if (current.source == PageSource::kHost) {
+    if (current.page.start == 0) {
       // Already on the first page: there is no page to turn back to, and the
       // built-in consumes the key here rather than passing it on.
       PublishDecision(ctx, HighlightAndTag(ctx, 0), true);
       return true;
     }
 
-    // No guard is needed on this side. The probe is the candidate just before
-    // this page, and an answer about it has to contain it, which forces
-    // previous.start <= current.start - 1; carried into the offset, that puts
-    // the target at most at selected - 1. However the host lays its pages out,
-    // a Page Up cannot move the highlight forward.
-    PageGeometry previous;
-    bool previous_from_host = false;
-    if (ResolvePage(schema, ctx, current.start - 1, &previous,
-                    &previous_from_host, allow_host) &&
-        previous_from_host) {
-      const size_t offset =
-          std::min(selected - current.start, previous.length - 1);
-      PublishDecision(ctx, HighlightAndTag(ctx, previous.start + offset), true);
-      return true;
-    }
-    // As in NextPage: the whole keystroke falls back rather than mixing models.
+    // The page being turned back to is whichever one holds the candidate just
+    // before this page. As in NextPage, the offset is carried over from the
+    // page being left and the answer decides the landing - including one that
+    // does not move the highlight, which is how a host makes this key a no-op.
+    const ResolvedPage previous =
+        ResolvePage(schema, ctx, current.page.start - 1, allow_host);
+    if (previous.source == PageSource::kHost)
+      PublishDecision(
+          ctx,
+          HighlightAndTag(ctx, LandingTarget(OffsetIn(selected, current.page),
+                                             previous.page)),
+          true);
+    // Declined: consumed without moving, and without falling back.
+    return true;
   }
+  if (current.source == PageSource::kDeclined)
+    return true;
 
+  // No host registered: the built-in arithmetic.
   const size_t page_size = PageSize(schema);
   const size_t target = selected < page_size ? 0 : selected - page_size;
   PublishDecision(ctx, HighlightAndTag(ctx, target), false);
@@ -434,18 +464,18 @@ bool SelectCandidateAt(const Schema* schema,
   const Composition& comp = ctx->composition();
   if (comp.empty() || slot < 0)
     return false;
-  PageGeometry current;
-  bool from_host = false;
-  if (!ResolvePage(schema, ctx, comp.back().selected_index, &current,
-                   &from_host, allow_host))
+  const ResolvedPage current =
+      ResolvePage(schema, ctx, comp.back().selected_index, allow_host);
+  // A declined answer selects nothing. The caller still consumes the key, as
+  // the built-in selector does for a slot past the end of a page.
+  if (current.source == PageSource::kDeclined)
     return false;
   // The slot is relative to the page the highlight is on, and a variable-length
   // page has no fixed slot count: a slot past the end of this page does not
-  // reach into the next one. The caller still consumes the key, as the built-in
-  // selector does.
-  if (static_cast<size_t>(slot) >= current.length)
+  // reach into the next one.
+  if (static_cast<size_t>(slot) >= current.page.length)
     return false;
-  return ctx->Select(current.start + static_cast<size_t>(slot));
+  return ctx->Select(current.page.start + static_cast<size_t>(slot));
 }
 
 void OnContextChanged(Context* ctx) {

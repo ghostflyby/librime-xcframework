@@ -35,8 +35,10 @@
  *     the "paging" tag the segment carries after a page turn or a candidate
  *     move, which is what enables key_binder's `when: paging` bindings.
  *
- * With no host registered, or when the host answers "unknown", the module falls
- * back to the built-in arithmetic, so it is a drop-in replacement.
+ * With no host registered the module behaves like the built-in selector, so it
+ * is a drop-in replacement. Once a host registers, its answers are the only
+ * page model in use: a declined answer stops that keystroke, and the built-in
+ * arithmetic is not substituted for it. See the resolver contract below.
  *
  * Candidate labels are the one part of the built-in arrangement this module
  * does not touch, and a host laying out variable-length pages has to know why:
@@ -89,15 +91,16 @@
  *
  * There is deliberately no configuration switch to turn it off. Whether pages
  * are variable is a rendering decision, so only the renderer may make it:
- * unregister the resolver, or answer false for the request at hand. A schema
- * author who disabled the module while the host still assumed variable-length
- * pages would get a silently misplaced highlight, which is the failure this
- * module exists to prevent.
+ * unregister the resolver. (Answering false declines one keystroke; it does not
+ * hand the page model back to the built-in arithmetic.) A schema author who
+ * disabled the module while the host still assumed variable-length pages would
+ * get a silently misplaced highlight, which is the failure this module exists
+ * to prevent.
  *
- * Only one thing is asked of the host: answer, for a candidate index, which
- * page contains it. Everything else the module does with page geometry is
- * derived from that, and everything the host does with pages it already knows -
- * it is the side computing the layout. In particular:
+ * Only one thing is asked of the host: answer, for a candidate index, with the
+ * page it wants that index resolved to. Everything else the module does with
+ * page geometry is derived from that, and everything the host does with pages
+ * it already knows - it is the side computing the layout. In particular:
  *
  *   - Pages are not pushed in. The host owns the layout, so it holds the answer
  *     already; a copy of it inside the module would be a second source of truth
@@ -127,9 +130,12 @@
  * Lua script read the same answer:
  *
  *   varpage.index   absolute index of the highlighted candidate
- *   varpage.source  "client" when the host's pages determined the most recent
- *                   page move, "fallback" when the built-in page_size
- *                   arithmetic did
+ *   varpage.source  "client" when the host's pages decided the most recent page
+ *                   move. Written only for a move that happened, and only for a
+ *                   registered session, so with a host registered it is always
+ *                   "client"; a keystroke whose answer was declined publishes
+ *                   nothing and leaves the properties describing the last move
+ *                   that did happen.
  *
  * Both are cleared when the composition ends. Publishing starts with the
  * registration, so a session that never registers sees no property traffic.
@@ -205,41 +211,44 @@
 extern "C" {
 #endif
 
-// A page: `length` candidates starting at absolute index `start`. Must satisfy
-// length > 0, start <= index < start + length for the index it was resolved
-// for, and start + length <= the number of candidates.
+// A page: `length` candidates starting at absolute index `start`. The only
+// requirements are length > 0 and start + length <= the number of candidates;
+// the page does not have to contain the index it was resolved for.
 typedef struct rime_varpage_page {
   size_t start;
   size_t length;
 } RimeVarPage;
 
-// Resolve the page holding the candidate at absolute index `index`.
+// Resolve, for the candidate at absolute index `index`, the page the keyboard
+// should work in.
 //
 // Called synchronously from inside key handling. Only ever called for indices
 // known to hold a candidate. Return true and fill `page`, or return false to
-// say "unknown" - the module then uses the built-in page_size arithmetic for
-// that keystroke. `user_data` is what was passed to set_resolver.
+// decline. `user_data` is what was passed to set_resolver.
 //
-// The returned page must contain `index`, and it must lie inside the candidate
-// list: start + length may not reach past the last candidate. Those are the
-// only two requirements - the module does not ask pages to relate to one
-// another in any particular way. They may tile or overlap, and a page turn
-// lands wherever that geometry puts it: the highlight's offset is carried into
-// the page the turn resolves to, so an answer that begins before the page it
-// turns from moves the highlight backwards. That is the host's call, and the
-// module honours it.
+// The only requirement on the answer is that it lies inside the candidate list:
+// start + length may not reach past the last candidate, and length must be
+// positive. Nothing is asked of how pages relate to one another, and nothing of
+// how the answer relates to `index` - the module cannot see the layout it came
+// from, so it takes the geometry as given. Pages may tile, overlap, or leave
+// gaps; an answer may be a page the highlight is not on.
 //
-// One consequence of probing by fixed arithmetic rather than by search: a page
-// turn asks about the index just past the current page (just before it, for
-// Page Up), so an index no answer contains cannot be crossed. The host has no
-// page to name there and returns false, and that keystroke falls back to the
-// built-in arithmetic - the one thing that is wrong for a variable-length
-// layout. So answer for every index you want the keyboard to navigate across: a
-// gap in the layout is a gap the page keys cannot cross.
+// A page turn asks twice: first about the page the highlight is on, then about
+// the index just past that page (just before it, for Page Up). The highlight's
+// offset, measured in the page it is leaving, is carried into the second answer
+// and clamped to that page's length. Where a turn lands is therefore a question
+// about the two answers, and only the host's layout knows the answer: if the
+// second page begins before the first ends, the highlight moves backwards; if
+// it is the page already being viewed, the highlight does not move at all -
+// that is how a host makes a page key a no-op.
 //
-// An answer that fails either requirement is declined and the built-in
-// page_size arithmetic serves that keystroke instead; varpage.source reports
-// which model was used.
+// Declining an answer stops the keystroke; it does not put the built-in
+// page_size arithmetic in its place. The key is consumed, so page down is not
+// delivered to the application, and nothing is published: the module would
+// rather do nothing than page by a geometry the host did not draw. Once a
+// resolver is registered that holds for every answer, `false` included. (A
+// session that never registers is a different matter - there the built-in
+// selector's behaviour is what a drop-in replacement owes it.)
 //
 // Do not call librime's mutating entry points from here (see the file comment);
 // reading candidates is fine.

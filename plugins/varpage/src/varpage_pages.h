@@ -23,9 +23,6 @@ struct PageGeometry {
   size_t length = 0;
 
   size_t end() const { return start + length; }
-  bool Contains(const size_t index) const {
-    return index >= start && index - start < length;
-  }
 };
 
 // Host-facing entry points, called by the module's C API.

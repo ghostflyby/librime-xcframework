@@ -342,7 +342,8 @@ varpage->set_resolver(session, my_resolver, my_context);
 varpage->clear_resolver(session);   // before destroying the session
 ```
 
-The resolver answers one question: which page contains a given candidate index.
+The resolver answers one question: for a candidate index, which page should the
+keyboard resolve to.
 Everything else is either derived from that, or already known to the host, which
 is the side computing the layout. There is deliberately no way to push a page in,
 no delegated page turn, and no index-to-page query — each of those would ask the
@@ -355,25 +356,32 @@ with their defaults and the full action vocabulary,
 `menu/alternative_select_keys` and the digit/keypad fallback,
 `menu/page_down_cycle`, the `_vertical` / `_linear` options, and the segment's
 `paging` tag that enables `key_binder`'s `when: paging` bindings. With no host
-registered, or when the host answers "unknown", it falls back to the built-in
-arithmetic, so it is a drop-in replacement. There is deliberately no
+registered it behaves like the built-in selector, so it is a drop-in
+replacement; once a host registers, its answers are the only page model in use,
+and a declined answer stops that keystroke rather than being replaced by
+`page_size` arithmetic behind the host's layout. There is deliberately no
 configuration switch to turn it off: whether pages vary is a rendering decision,
 so only the renderer makes it.
 
 For a host, three points matter:
 
-- **Answer for every page you have laid out, not just the visible one.** A page
-  turn asks about the candidate just past the current page, which may not be on
-  screen yet. Answer "unknown" there and that keystroke falls back to the
-  built-in `page_size` arithmetic, which in a variable-length layout is the wrong
-  page. How the pages relate to one another is up to you — they may tile or
-  overlap — and the highlight's offset is carried across the turn, so the page a
-  turn resolves to decides where the highlight lands, backwards included. Two
-  limits remain. An answer may not extend past the last candidate. And because a
-  turn probes a fixed index (the one just past the current page, or just before
-  it for Page Up), an index no answer contains cannot be crossed: the keystroke
-  falls back to the built-in arithmetic. Answer for every index you want the
-  keyboard to navigate across.
+- **Your layout is the only one in use once your resolver is registered.** A page
+  turn asks twice — first about the page the highlight is on, then about the
+  index just past it (just before it, for Page Up) — and the second answer decides
+  where the highlight lands: its offset is carried over, clamped to that page's
+  length. Pages may tile, overlap, or sit at any other distance from one another,
+  and an answer need not even contain the index it was asked about. So a turn can
+  move backwards, or not at all: answering with the page already being viewed is
+  how you make a page key a no-op. `varpage.source` reads `client`, which is
+  what distinguishes that from an answer the module declined — as long as the
+  properties are not still describing an earlier move, since a declined
+  keystroke publishes nothing at all.
+  The one thing an answer may not do is extend past the last candidate. If it
+  does — or if you return false — the keystroke is consumed and **nothing moves**:
+  the module does not fall back to `page_size` arithmetic behind your layout. (A
+  session that never registers still gets the built-in selector's behaviour; that
+  is the drop-in promise, and it is the only case where `page_size` decides a
+  turn.)
 - **The resolver runs inside key handling.** It must be cheap and must not call
   back into librime's mutating entry points (`process_key`, `highlight`,
   `select`, `set_option`, `set_property`, `apply_schema`). Reading candidates is
@@ -390,12 +398,14 @@ For a host, three points matter:
   cannot outlive it.
 
 The highlight is published as session properties — `varpage.index` (absolute
-index, cleared when the composition ends) and `varpage.source` (`client` or
-`fallback`, naming the model behind the most recent page move) — so a host and
-any Lua script read the same answer.
+index, cleared when the composition ends) and `varpage.source` (`client`, naming
+the model behind the most recent page move) — so a host and any Lua script read
+the same answer. A keystroke whose answer was declined publishes nothing, so
+these always describe the last move that actually happened.
 
 `menu.*` in `get_context` is unaffected and still describes the built-in window;
-it is not the host's page. `menu.page_size` is the fallback page length.
+it is not the host's page. `menu.page_size` is the built-in page length, which is
+what a session that never registers uses.
 
 Its `select_labels`, however, is a trap for a variable-length layout, and the
 module's header documents the way around it. librime fills that array from
