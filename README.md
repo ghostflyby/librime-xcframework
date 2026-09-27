@@ -366,8 +366,14 @@ For a host, three points matter:
   turn asks about the candidate just past the current page, which may not be on
   screen yet. Answer "unknown" there and that keystroke falls back to the
   built-in `page_size` arithmetic, which in a variable-length layout is the wrong
-  page. Answers must also tile — the page after a given one begins where it ends
-  — because the highlight's offset is carried across the turn.
+  page. How the pages relate to one another is up to you — they may tile or
+  overlap — and the highlight's offset is carried across the turn, so the page a
+  turn resolves to decides where the highlight lands, backwards included. Two
+  limits remain. An answer may not extend past the last candidate. And because a
+  turn probes a fixed index (the one just past the current page, or just before
+  it for Page Up), an index no answer contains cannot be crossed: the keystroke
+  falls back to the built-in arithmetic. Answer for every index you want the
+  keyboard to navigate across.
 - **The resolver runs inside key handling.** It must be cheap and must not call
   back into librime's mutating entry points (`process_key`, `highlight`,
   `select`, `set_option`, `set_property`, `apply_schema`). Reading candidates is
