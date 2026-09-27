@@ -398,9 +398,10 @@ entries, and only when the configured list is at least that long — a page long
 than `page_size` cannot be labelled through it, and a list shorter than
 `page_size` yields no array at all rather than a short one. The array's lifetime
 is the same number: `free_context` releases exactly `menu.page_size` entries, so
-a host must not write `menu.page_size` in between (out-of-bounds delete), must
-not call `get_context` twice on one struct (the first allocation is dropped),
-and must not walk the array looking for a NULL terminator (there is none).
+a host must not write `menu.page_size` in between (raising it makes the release
+run past the allocation, lowering it leaks the tail), must not call
+`get_context` twice on one struct (the first allocation leaks), and must not
+walk the array looking for a NULL terminator (there is none).
 
 A host that needs labels for pages of its own length should read the
 configuration instead — `schema_open(schema_id, &config)` plus
