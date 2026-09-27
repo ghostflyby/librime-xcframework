@@ -38,6 +38,50 @@
  * With no host registered, or when the host answers "unknown", the module falls
  * back to the built-in arithmetic, so it is a drop-in replacement.
  *
+ * Candidate labels are the one part of the built-in arrangement this module
+ * does not touch, and a host laying out variable-length pages has to know why:
+ * rime->get_context fills select_labels from menu/alternative_select_labels,
+ * but always with exactly menu/page_size entries, and only when the configured
+ * list reaches that length. A page longer than page_size therefore cannot be
+ * labelled through that array - there is no room in it for the farther slots,
+ * and the array's length and lifetime are both page_size (free_context releases
+ * exactly that many entries). So a host should read the configuration itself:
+ *
+ *   RimeConfig config;
+ *   rime->schema_open(schema_id, &config);
+ *   size_t count = rime->config_list_size(&config,
+ *                                         "menu/alternative_select_labels");
+ *   for (size_t i = 0; i < count; ++i) {
+ *     char path[64];
+ *     snprintf(path, sizeof(path),
+ *              "menu/alternative_select_labels/@%zu", i);
+ *     const char* label = rime->config_get_cstring(&config, path);
+ *   }
+ *
+ * That is the same configuration the engine reads, patches and includes
+ * already merged, so it agrees with what get_context reports within page_size,
+ * and it answers for slots beyond it. Reproduce the engine's rule when
+ * rendering: a page shows labels only if the list is at least as long as that
+ * page, indexed by slot. schema_open takes a schema id rather than a session,
+ * and get_current_schema reports the .default pseudo-schema while the schema
+ * switcher panel is up, so resolve the id while the panel is closed; reopen
+ * the config after switching schemas or redeploying.
+ *
+ * Three things follow from the array being page_size-long and unterminated,
+ * and a host must keep all three:
+ *
+ *   - Do not write menu.page_size between get_context and free_context. The
+ *     array is released by that field, so changing it turns the release into an
+ *     out-of-bounds delete.
+ *   - Do not call get_context twice on the same struct; the second call drops
+ *     the first allocation.
+ *   - Do not walk the array looking for a NULL terminator - there is none, and
+ *     the walk reads past the allocation. Read exactly menu.page_size entries.
+ *
+ * This module does not publish labels itself. The configuration is the answer
+ * to the question, and a second copy of it here would be a second thing to keep
+ * in step with the host's layout.
+ *
  * There is deliberately no configuration switch to turn it off. Whether pages
  * are variable is a rendering decision, so only the renderer may make it:
  * unregister the resolver, or answer false for the request at hand. A schema

@@ -25,6 +25,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 usage: run.sh --build-dir <dir> [--schema <id>] [--input <keys>]
+              [--labels-off-schema <id>] [--labels-off-input <keys>]
 
   --build-dir <dir>  a cmake build tree of librime with varpage merged in:
                      <dir>/lib/librime.dylib and <dir>/bin/*.schema.yaml
@@ -35,6 +36,18 @@ usage: run.sh --build-dir <dir> [--schema <id>] [--input <keys>]
                      spans the whole input, because one assertion selects that
                      candidate and expects it to commit the input unchanged;
                      "nihao" does, an arbitrary string may not.
+  --labels-off-schema <id>
+                     a second schema, deployed with fewer labels than its
+                     page_size, on which an assertion checks that the engine
+                     then offers no label array at all (default cangjie5).
+                     Both schemas must be deployable from the data directory.
+  --labels-off-input <keys>
+                     key sequence that second schema translates (default "a",
+                     which is input for cangjie5)
+
+The test writes both schemas' `menu/alternative_select_keys` and label lists as
+`.custom.yaml` patches into the fresh user directory, so what the engine reads
+is what a real configuration would produce.
 
 The tree must be built with BUILD_SHARED_LIBS=ON, because the test links the
 library rather than the static archive, and with varpage merged
@@ -45,6 +58,8 @@ EOF
 build_dir=""
 schema=""
 input=""
+labels_off_schema=""
+labels_off_input=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +73,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --input)
       input="${2:?--input requires a key sequence}"
+      shift 2
+      ;;
+    --labels-off-schema)
+      labels_off_schema="${2:?--labels-off-schema requires an identifier}"
+      shift 2
+      ;;
+    --labels-off-input)
+      labels_off_input="${2:?--labels-off-input requires a key sequence}"
       shift 2
       ;;
     -h | --help)
@@ -117,6 +140,41 @@ if [[ -z "${input}" ]]; then
   input="nihao"
 fi
 
+# The schema the label gate is observed from the other side on. Same treatment as
+# the driving schema and for the same reason - it has to be deployable, and a
+# data set that lacks it fails here with a name rather than somewhere inside
+# deploy().
+if [[ -z "${labels_off_schema}" ]]; then
+  if [[ ! -f "${data_dir}/cangjie5.schema.yaml" ]]; then
+    printf 'no cangjie5.schema.yaml in %s; pass --labels-off-schema and\n' \
+      "${data_dir}" >&2
+    printf -- '--labels-off-input\n' >&2
+    exit 1
+  fi
+  labels_off_schema="cangjie5"
+fi
+if [[ ! -f "${data_dir}/${labels_off_schema}.schema.yaml" ]]; then
+  printf 'no %s.schema.yaml in %s\n' "${labels_off_schema}" "${data_dir}" >&2
+  exit 1
+fi
+if [[ -z "${labels_off_input}" ]]; then
+  if [[ "${labels_off_schema}" != "cangjie5" ]]; then
+    printf 'schema %s: pass --labels-off-input with a key sequence it\n' \
+      "${labels_off_schema}" >&2
+    printf -- 'translates\n' >&2
+    exit 1
+  fi
+  labels_off_input="a"
+fi
+
+if [[ "${labels_off_schema}" == "${schema}" ]]; then
+  printf 'the label-gate schema must differ from the driving schema (%s):\n' \
+    "${schema}" >&2
+  printf 'the test gives the driving schema more labels than page_size and\n' >&2
+  printf 'the label-gate schema fewer, so one schema cannot serve both roles\n' >&2
+  exit 1
+fi
+
 # Headers: the plugin's own public header, plus the C API headers. A build tree
 # that has been installed into carries them in <dir>/include; otherwise they
 # come from the upstream source the build was made from, which its CMakeCache
@@ -154,5 +212,7 @@ c++ -std=c++17 -O1 -Wall -Wextra \
   -L"${lib_dir}" -lrime -Wl,-rpath,"${lib_dir}"
 
 mkdir -p "${user_dir}"
-printf 'schema %s, input %s\n' "${schema}" "${input}"
-"${work_dir}/varpage_test" "${data_dir}" "${user_dir}" "${schema}" "${input}"
+printf 'schema %s, input %s; label-gate schema %s, input %s\n' \
+  "${schema}" "${input}" "${labels_off_schema}" "${labels_off_input}"
+"${work_dir}/varpage_test" "${data_dir}" "${user_dir}" "${schema}" "${input}" \
+  "${labels_off_schema}" "${labels_off_input}"

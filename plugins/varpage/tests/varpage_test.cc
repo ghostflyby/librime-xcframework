@@ -22,13 +22,16 @@
 //     reads varpage.* alone can pass on a value written earlier; where a
 //     property is used it is cross-checked against the highlight the engine
 //     holds.
-//   - The host page table below is nothing like the built-in page_size (3 then
-//     4), which is what lets a check tell the two models apart: a page key that
-//     lands on 3 went through the host, one that lands on 5 through the
-//     built-in.
+//   - The host page table below is nothing like the built-in page_size (3, 4,
+//     then 6 candidates), which is what lets a check tell the two models apart:
+//     a page key that lands on 3 went through the host, one that lands on 5
+//     through the built-in. The third page is longer than page_size on purpose,
+//     because that is the only shape in which the two models disagree about
+//     which slots exist.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include <rime_api.h>
 #include <rime_varpage_api.h>
@@ -44,10 +47,31 @@ void Check(bool condition, const std::string& what) {
     ++g_failures;
 }
 
-// A host layout: page 0 holds candidates [0,3), page 1 holds [3,7). Neither
-// agrees with the built-in page_size of 5.
-const size_t kStarts[2] = {0, 3};
-const size_t kLengths[2] = {3, 4};
+// A host layout. Page 0 holds [0,3) and page 1 [3,7) - neither agrees with the
+// built-in page_size of 5 - and page 2 holds [7,13), which is *longer* than
+// page_size so that select keys can address slots the built-in page would
+// reject. Pages tile: each begins where the previous one ends.
+const size_t kPageCount = 3;
+const size_t kStarts[kPageCount] = {0, 3, 7};
+const size_t kLengths[kPageCount] = {3, 4, 6};
+
+// The select-key string the test configures. It is 1-based like the usual
+// Rime configuration and deliberately omits '0': with a non-empty string the
+// engine does not fall back to the digit rule, so '0' stops being a select key
+// altogether - which is the behaviour one assertion below pins down.
+const char kSelectKeys[] = "123456789";
+
+// Labels configured for the driving schema, one per slot of the largest page it
+// may be asked to label. Only the first page_size of them are reachable through
+// the C API's select_labels.
+const char* const kLabels[] = {"①", "②", "③", "④", "⑤",
+                              "⑥", "⑦", "⑧", "⑨"};
+const size_t kLabelCount = sizeof(kLabels) / sizeof(kLabels[0]);
+
+// Labels configured for the second schema, deliberately fewer than its
+// page_size: the C API's gate withholds the whole array in that case rather
+// than padding or truncating.
+const size_t kFewLabels = 3;
 
 // Counts calls so a test can assert the host was *not* consulted.
 int resolver_calls = 0;
@@ -59,7 +83,7 @@ bool Resolver(void* user_data,
   (void)user_data;
   (void)session_id;
   ++resolver_calls;
-  for (int i = 0; i < 2; ++i) {
+  for (size_t i = 0; i < kPageCount; ++i) {
     if (index >= kStarts[i] && index < kStarts[i] + kLengths[i]) {
       page->start = kStarts[i];
       page->length = kLengths[i];
@@ -199,12 +223,71 @@ int PageSize(RimeSessionId session) {
   return page_size;
 }
 
+// The C API's label array, as a host receives it: `present` is whether
+// select_labels was non-NULL at all, and `labels` holds exactly page_size
+// entries - the bound the array's lifetime is built around, and the only one a
+// caller may use. One get_context per struct: a second call on the same struct
+// would drop the first allocation.
+struct Labels {
+  bool present = false;
+  int page_size = 0;
+  std::vector<std::string> labels;
+};
+
+Labels ReadLabels(RimeSessionId session) {
+  Labels result;
+  RimeContext context{};
+  RIME_STRUCT_INIT(RimeContext, context);
+  if (!g_rime->get_context(session, &context))
+    return result;
+  result.page_size = context.menu.page_size;
+  if (context.select_labels) {
+    result.present = true;
+    for (int i = 0; i < context.menu.page_size; ++i) {
+      result.labels.push_back(context.select_labels[i]
+                                  ? context.select_labels[i]
+                                  : std::string("(null)"));
+    }
+  }
+  g_rime->free_context(&context);
+  return result;
+}
+
+// The label list as a host can read it for itself, which is the only route to
+// entries past page_size. This is the same config the engine reads: schema_open
+// resolves the deployed, patch-merged file that the engine's own Schema also
+// loads.
+std::vector<std::string> ConfigLabels(const char* schema_id) {
+  std::vector<std::string> labels;
+  RimeConfig config{};
+  if (!g_rime->schema_open(schema_id, &config))
+    return labels;
+  const size_t size =
+      g_rime->config_list_size(&config, "menu/alternative_select_labels");
+  for (size_t i = 0; i < size; ++i) {
+    char key[64];
+    std::snprintf(key, sizeof(key), "menu/alternative_select_labels/@%zu", i);
+    const char* label = g_rime->config_get_cstring(&config, key);
+    labels.push_back(label ? label : "");
+  }
+  g_rime->config_close(&config);
+  return labels;
+}
+
+std::string Joining(const std::vector<std::string>& labels) {
+  std::string joined;
+  for (const std::string& label : labels)
+    joined += label;
+  return joined;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 5) {
+  if (argc < 7) {
     std::printf(
-        "usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys>\n",
+        "usage: %s <shared-data-dir> <user-data-dir> <schema-id> <keys> "
+        "<labels-off-schema> <labels-off-keys>\n",
         argv[0]);
     return 2;
   }
@@ -215,6 +298,13 @@ int main(int argc, char** argv) {
   // so it is a parameter rather than a constant: "nihao" means nothing to a
   // shape-based schema.
   const char* input = argv[4];
+  // A second schema, used to observe the label gate from the other side: it is
+  // given fewer labels than its page_size, and the assertion is that the C API
+  // then reports no labels at all.
+  const char* labels_off_schema = argv[5];
+  // The key sequence that second schema translates, which only it knows how to
+  // answer: a candidate list is what the label gate is observed on.
+  const char* labels_off_input = argv[6];
 
   // A selector binding that collides with a select key, deployed as a real user
   // patch so the loader merges it the way it merges a user's own config.
@@ -237,6 +327,47 @@ int main(int argc, char** argv) {
         "      \"2\": next_candidate\n"
         "      \"4\": home\n",
         patch);
+    std::fclose(patch);
+  }
+
+  // The select keys and labels for the driving schema. Both are written as a
+  // user patch, i.e. through the same deploy-time merge any schema author's
+  // `.custom.yaml` goes through, so what the engine reads here is what a real
+  // configuration produces. kSelectKeys omits '0', which turns it into a probe:
+  // a digit inside the string selects by position, a digit outside it is not a
+  // select key at all.
+  {
+    const std::string patch_path =
+        std::string(user_data_dir) + "/" + schema_id + ".custom.yaml";
+    FILE* patch = std::fopen(patch_path.c_str(), "w");
+    if (!patch) {
+      std::printf("FAIL  cannot write %s\n", patch_path.c_str());
+      return 1;
+    }
+    std::fputs("patch:\n  menu/alternative_select_keys: \"", patch);
+    std::fputs(kSelectKeys, patch);
+    std::fputs("\"\n  menu/alternative_select_labels: [", patch);
+    for (size_t i = 0; i < kLabelCount; ++i) {
+      std::fprintf(patch, "%s\"%s\"", i ? ", " : "", kLabels[i]);
+    }
+    std::fputs("]\n", patch);
+    std::fclose(patch);
+  }
+
+  // The other side of the label gate: fewer labels than page_size.
+  {
+    const std::string patch_path =
+        std::string(user_data_dir) + "/" + labels_off_schema + ".custom.yaml";
+    FILE* patch = std::fopen(patch_path.c_str(), "w");
+    if (!patch) {
+      std::printf("FAIL  cannot write %s\n", patch_path.c_str());
+      return 1;
+    }
+    std::fprintf(patch, "patch:\n  menu/alternative_select_labels: [");
+    for (size_t i = 0; i < kFewLabels; ++i) {
+      std::fprintf(patch, "%s\"%s\"", i ? ", " : "", kLabels[i]);
+    }
+    std::fputs("]\n", patch);
     std::fclose(patch);
   }
 
@@ -396,6 +527,107 @@ int main(int argc, char** argv) {
   // preedit and commits nothing, so an empty commit is true either way.
   Check(Preedit(session) == before_declined,
         "a declined binding does not select from the built-in page's slots");
+
+  // -- A host page longer than page_size takes slots page_size cannot. ------
+  // The third host page is [7,13): six candidates, one more than the built-in
+  // page_size. Slot 5 exists there and has no counterpart on any built-in page,
+  // so it is the case that tells the two slot arithmetics apart in the other
+  // direction from the short-page checks above. Two page turns walk the
+  // highlight 0 -> 3 -> 7, and '6' is the sixth character of the configured key
+  // string, i.e. slot 5.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  rime->process_key(session, 0xFF56, 0);
+  rime->process_key(session, 0xFF56, 0);
+  Check(Highlighted(session) == 7, "two page turns reach the host's third page");
+  {
+    const std::string sixth = CandidateAt(session, 12);
+    Check(rime->process_key(session, '6', 0), "select key 6 is consumed");
+    // The candidate covers one syllable of the input, so it lands in the preedit
+    // rather than in the commit; an empty commit is expected either way and
+    // proves nothing on its own.
+    Check(!sixth.empty() && Preedit(session).find(sixth) != std::string::npos,
+          "and it takes slot 5, which page_size alone would have rejected ('" +
+              sixth + "')");
+  }
+
+  // One slot further is past the end of that page: '9' is slot 8 and the page
+  // holds six. As on a short built-in page, the key is consumed and the
+  // composition does not move.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  rime->process_key(session, 0xFF56, 0);
+  rime->process_key(session, 0xFF56, 0);
+  Check(Highlighted(session) == 7, "back on the long page");
+  {
+    const std::string before = Preedit(session);
+    Check(rime->process_key(session, '9', 0), "slot 8 is consumed");
+    Check(Preedit(session) == before && Highlighted(session) == 7,
+          "but selects nothing: it is past the end of the six-candidate page");
+  }
+
+  // A digit outside a non-empty select-key string is not a select key at all -
+  // the string replaces the digit rule rather than extending it, which is the
+  // built-in contract the module keeps. '0' is the probe, because the configured
+  // string stops at '9'. With no processor claiming it, the key falls through to
+  // the editor, which ends the composition.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  Check(Highlighted(session) == 0, "a fresh composition for the unbound digit");
+  Check(!rime->process_key(session, '0', 0),
+        "'0' is not a select key when the configured string omits it");
+  Check(Highlighted(session) == -1,
+        "and the key fell through to the editor, which ended the composition");
+
+  // -- select_labels stay bound to page_size. ------------------------------
+  // The engine builds its label array from the same configuration this test
+  // writes, but it hands out exactly page_size entries, and only when the
+  // configured list is at least that long. A host page longer than page_size
+  // therefore cannot be labelled through that array - which is why the module's
+  // header tells a host to read the configuration itself. These checks pin the
+  // engine's side of that arrangement; the config read below is the host's.
+  rime->clear_composition(session);
+  rime->simulate_key_sequence(session, input);
+  rime->process_key(session, 0xFF56, 0);
+  rime->process_key(session, 0xFF56, 0);
+  Check(Highlighted(session) == 7, "on the long host page for the label checks");
+  {
+    const Labels labels = ReadLabels(session);
+    Check(labels.present, "the engine offers a label array");
+    Check(labels.page_size == page_size,
+          "whose page_size is the built-in one, not the host page's six");
+    bool matches = labels.labels.size() == static_cast<size_t>(page_size);
+    for (size_t i = 0; matches && i < labels.labels.size(); ++i)
+      matches = labels.labels[i] == kLabels[i];
+    Check(matches,
+          "and its page_size entries are the first page_size configured "
+          "labels, in slot order");
+  }
+  {
+    const std::vector<std::string> configured = ConfigLabels(schema_id);
+    bool complete = configured.size() == kLabelCount;
+    for (size_t i = 0; complete && i < kLabelCount; ++i)
+      complete = configured[i] == kLabels[i];
+    Check(complete,
+          "while a host that opens the schema config reads all nine, which is "
+          "what makes a page longer than page_size labelable at all");
+  }
+
+  // The gate from the other side: a list shorter than page_size yields no array
+  // at all rather than a short one, so labels can go missing without the page
+  // being long. This second schema is deployed with three of them against the
+  // same page_size of five.
+  {
+    const RimeSessionId short_session = rime->create_session();
+    rime->select_schema(short_session, labels_off_schema);
+    rime->simulate_key_sequence(short_session, labels_off_input);
+    const Labels none = ReadLabels(short_session);
+    Check(none.page_size > static_cast<int>(kFewLabels),
+          "the second schema's page_size is larger than its label list");
+    Check(!none.present,
+          "and the engine then offers no label array at all, not a short one");
+    rime->destroy_session(short_session);
+  }
 
   // -- A host answer that does not tile is declined. ------------------------
   // The probe is the candidate just past the current page, and the offset is

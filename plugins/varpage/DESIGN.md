@@ -171,7 +171,7 @@ typedef struct rime_varpage_api_t {
 12. 高亮/选中一律使用绝对索引的 `highlight_candidate` / `select_candidate`，并停用 `change_page` 与 `*_on_current_page`。
 13. 渲染时自检：高亮索引若落在已知页之外，立即重算布局（filter 会重排候选，Lua 也可能裸写 `segment.selected_index`，插件无从感知）。
 14. 若通过 `traits.modules` 显式传模块列表，必须包含 `varpage`（否则 `kDefaultModules` 被整体替换，插件不加载）。
-15. 若要 `select_labels`，把 `menu/page_size` 设为 UI 能显示的最大页容量——`select_labels` 的长度上限就是它，且只在 schema 列表长度 ≥ `page_size` 时给出。
+15. 若要候选标签，**不要走 `get_context` 的 `select_labels`**：它恒为 `page_size` 项（`rime_api_impl.h:270-278`），且只在配置列表长度 ≥ `page_size` 时给出——页长于 `page_size` 时它描述不了这些页，短于 `page_size` 时整个数组为 NULL。客户端应自己读配置：`schema_open(schema_id)` + `config_list_size("menu/alternative_select_labels")` + `config_get_cstring(".../@N")`。这是**引擎读的同一份已合并配置**（deploy 把 `*.custom.yaml` 合并结果落盘到 staging，`SaveOutputPlugin`；`schema_open` 与引擎的 `Schema` 走同一个 `schema` 组件），所以它在 `page_size` 以内与 `select_labels` 一致，并额外回答更远的槽位。渲染时照抄引擎的规则：**该页长度 ≤ 列表长度才显示标签**，按 host 页槽位索引。schema id 用 `get_current_schema` 取时注意方案选单打开期间它报 `.default`，要等面板关闭；切换方案或重新部署后重开配置。
 
 ### 6.4 客户端禁止
 
@@ -201,7 +201,7 @@ typedef struct rime_varpage_api_t {
 ## 8. 不改动项（core 层，客户端需知）
 
 1. `get_context` 的 `menu.page_no` / `highlighted_candidate_index` / `num_candidates` / `is_last_page` 仍按 `page_size` 切窗口，语义与客户端页无关。可用 `page_no * page_size + highlighted_candidate_index` 还原绝对索引。
-2. `context->select_labels` 上限为 `page_size`。
+2. `context->select_labels` 恒为 `page_size` 项：配置列表更长则**静默截断**到 `page_size`，更短则该数组**整个为 NULL**（不是截断）。要标签就自己读配置，见 §6.3 第 15 条。全树只有填充（`rime_api_impl.h:270-278`）与释放（`:295-301`）两处访问它，无任何数量校验，引擎内部、Lua 绑定、其余插件、console 工具都不读。
 3. `free_context` 用 `menu.page_size` 释放 `select_labels`，故获取后到释放前**不得改写** `menu.page_size`；同一结构体不得连续 `get_context` 两次。
 4. `change_page` 与 `*_on_current_page` 不受本插件影响。
 5. `page_size` 运行期不可改（Schema 无 setter），仅作回退页长。
@@ -260,7 +260,7 @@ typedef struct rime_varpage_api_t {
 
 **未实现（有意）**
 
-- `menu/alternative_select_labels` 不参与：它是渲染侧元数据，`select_labels` 由 C API 按 `page_size` 给出，与本插件的页模型无关（§8 第 2 条）。
+- 不提供标签接口、也不发布标签 property：标签是 schema 配置（`menu/alternative_select_labels`），客户端能直接读，而引擎那份 `select_labels` 被 `page_size` 锁死（§8 第 2 条），复制一份到插件里只会多一个要跟着 host 布局走的副本。做法记在 §6.3 第 15 条。
 - 无 enabled 开关、无关闭配置键（§4）。
 
 **验证**
@@ -275,9 +275,9 @@ BUILD_TESTS=1 VCPKG_ROOT=... scripts/build-one-arch.sh macos-arm64
 
 `gtest` 藏在 `vcpkg.json` 的 `tests` feature 后面，且 `BUILD_TESTS` 配置自己的构建树（`.build/build-<platform>-test`）并在测试后停止，因此发布构建既不装测试框架，也不会把 gtest 的版权文件带进 `third-party-notices.zip`。细节与约束记在 `AGENTS.md` 的 Tests 一节。
 
-74 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册；被丢弃的注册无需手动清理；**`user_data` 的归属与释放时机**（见下）。
+90 条断言，覆盖：模块注册与 `get_api`；未注册时无 property 流量；无 host 时 `Page_Down` 按 `page_size` 移动；resolver 答"未知"时回退且 `varpage.source` 报 `fallback`；注册 host 后同一按键落到 host 页首（3 而非 5）；选择键槽位受 host 页长约束（页长 3 时槽位 3 被消费但不选中；页长 6 时槽位 5 选中索引 12——`page_size` 单独给不出的那个槽位——而槽位 8 被消费但不选中）；非空 `alternative_select_keys` 关闭数字回退（不在串里的 `'0'` 整个不是选择键，落给 editor 结束组合）；数字键被配置绑定时执行动作而非选中；`when: paging` 绑定在翻页后仍生效（标记未丢，且用"未提交文本 + 候选表存活"区分于落在 punctuator 上）；不 tile 的答案被拒绝且整次退回；注册在切换器面板打开后仍生效；两个会话互不干扰；组合结束清空属性；`clear_resolver` 在会话销毁后仍能找到注册；被丢弃的注册无需手动清理；**标签的引擎侧契约**（`select_labels` 实际交付的恰为前 `page_size` 项且按槽位序，而 `schema_open` 能读回全部 9 项；另一个 schema 只配 3 项时整个数组为 NULL）；**`user_data` 的归属与释放时机**（见下）。
 
-断言的有效性用反例校准过：去掉 tiling 守卫 → 高亮从 5 退回 1，3 条失败；不写 `paging` 标记 → 3 条失败；按"活跃 context"判定注册失效（切换器回归）→ 3 条失败。
+断言的有效性用反例校准过：去掉 tiling 守卫 → 高亮从 5 退回 1，3 条失败；不写 `paging` 标记 → 3 条失败；按"活跃 context"判定注册失效（切换器回归）→ 3 条失败；把 `SelectCandidateAt` 的页长换成 `PageSize(schema)` → 长页槽位断言失败；去掉页长上界 → 超长槽位断言失败。
 
 测试期间用反例校准过每一条断言的有效性——把修复放回去或删掉，对应断言必须失败。有几条最初是**无效的**，已改写：只断言"`minus` 被消费"证明不了 `paging` 标记存在（没标记时 punctuator 同样消费它并提交 `你-`，且清空 composition 也让索引回到 0）；"高亮未后退"在起点为 0 时恒真。改写后的版本各自验证过：删掉 `paging` 写入 → 提交断言失败；删掉 `next.start == probe` 的 tiling 守卫 → 高亮从 5 退回 1，断言失败。
 
