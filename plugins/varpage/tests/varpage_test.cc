@@ -64,8 +64,7 @@ const char kSelectKeys[] = "123456789";
 // Labels configured for the driving schema, one per slot of the largest page it
 // may be asked to label. Only the first page_size of them are reachable through
 // the C API's select_labels.
-const char* const kLabels[] = {"①", "②", "③", "④", "⑤",
-                              "⑥", "⑦", "⑧", "⑨"};
+const char* const kLabels[] = {"①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"};
 const size_t kLabelCount = sizeof(kLabels) / sizeof(kLabels[0]);
 
 // Labels configured for the second schema, deliberately fewer than its
@@ -272,13 +271,6 @@ std::vector<std::string> ConfigLabels(const char* schema_id) {
   }
   g_rime->config_close(&config);
   return labels;
-}
-
-std::string Joining(const std::vector<std::string>& labels) {
-  std::string joined;
-  for (const std::string& label : labels)
-    joined += label;
-  return joined;
 }
 
 }  // namespace
@@ -539,13 +531,14 @@ int main(int argc, char** argv) {
   rime->simulate_key_sequence(session, input);
   rime->process_key(session, 0xFF56, 0);
   rime->process_key(session, 0xFF56, 0);
-  Check(Highlighted(session) == 7, "two page turns reach the host's third page");
+  Check(Highlighted(session) == 7,
+        "two page turns reach the host's third page");
   {
     const std::string sixth = CandidateAt(session, 12);
     Check(rime->process_key(session, '6', 0), "select key 6 is consumed");
-    // The candidate covers one syllable of the input, so it lands in the preedit
-    // rather than in the commit; an empty commit is expected either way and
-    // proves nothing on its own.
+    // The candidate covers one syllable of the input, so it lands in the
+    // preedit rather than in the commit; an empty commit is expected either way
+    // and proves nothing on its own.
     Check(!sixth.empty() && Preedit(session).find(sixth) != std::string::npos,
           "and it takes slot 5, which page_size alone would have rejected ('" +
               sixth + "')");
@@ -568,9 +561,9 @@ int main(int argc, char** argv) {
 
   // A digit outside a non-empty select-key string is not a select key at all -
   // the string replaces the digit rule rather than extending it, which is the
-  // built-in contract the module keeps. '0' is the probe, because the configured
-  // string stops at '9'. With no processor claiming it, the key falls through to
-  // the editor, which ends the composition.
+  // built-in contract the module keeps. '0' is the probe, because the
+  // configured string stops at '9'. With no processor claiming it, the key
+  // falls through to the editor, which ends the composition.
   rime->clear_composition(session);
   rime->simulate_key_sequence(session, input);
   Check(Highlighted(session) == 0, "a fresh composition for the unbound digit");
@@ -590,7 +583,8 @@ int main(int argc, char** argv) {
   rime->simulate_key_sequence(session, input);
   rime->process_key(session, 0xFF56, 0);
   rime->process_key(session, 0xFF56, 0);
-  Check(Highlighted(session) == 7, "on the long host page for the label checks");
+  Check(Highlighted(session) == 7,
+        "on the long host page for the label checks");
   {
     const Labels labels = ReadLabels(session);
     Check(labels.present, "the engine offers a label array");
@@ -621,8 +615,17 @@ int main(int argc, char** argv) {
     const RimeSessionId short_session = rime->create_session();
     rime->select_schema(short_session, labels_off_schema);
     rime->simulate_key_sequence(short_session, labels_off_input);
+    // Check the configuration the assertion is about before checking what the
+    // engine makes of it. Without this, a patch that failed to write or merge
+    // would also produce "no array", and the assertion below would pass while
+    // proving nothing - the very thing it exists to pin down would be absent
+    // rather than withheld.
+    const std::vector<std::string> configured = ConfigLabels(labels_off_schema);
+    Check(configured.size() == kFewLabels,
+          "the second schema really has a label list, with fewer entries than "
+          "its page_size");
     const Labels none = ReadLabels(short_session);
-    Check(none.page_size > static_cast<int>(kFewLabels),
+    Check(none.page_size > static_cast<int>(configured.size()),
           "the second schema's page_size is larger than its label list");
     Check(!none.present,
           "and the engine then offers no label array at all, not a short one");

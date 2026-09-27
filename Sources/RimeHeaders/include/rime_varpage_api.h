@@ -48,15 +48,20 @@
  * exactly that many entries). So a host should read the configuration itself:
  *
  *   RimeConfig config;
- *   rime->schema_open(schema_id, &config);
- *   size_t count = rime->config_list_size(&config,
- *                                         "menu/alternative_select_labels");
- *   for (size_t i = 0; i < count; ++i) {
- *     char path[64];
- *     snprintf(path, sizeof(path),
- *              "menu/alternative_select_labels/@%zu", i);
- *     const char* label = rime->config_get_cstring(&config, path);
+ *   if (rime->schema_open(schema_id, &config)) {
+ *     size_t count = rime->config_list_size(&config,
+ *                                           "menu/alternative_select_labels");
+ *     for (size_t i = 0; i < count; ++i) {
+ *       char path[64];
+ *       snprintf(path, sizeof(path),
+ *                "menu/alternative_select_labels/@%zu", i);
+ *       const char* label = rime->config_get_cstring(&config, path);
+ *     }
+ *     rime->config_close(&config);
  *   }
+ *
+ * The guard matters: a failed schema_open leaves the RimeConfig untouched, and
+ * config_close on it would release whatever the uninitialized pointer held.
  *
  * That is the same configuration the engine reads, patches and includes
  * already merged, so it agrees with what get_context reports within page_size,
@@ -71,10 +76,10 @@
  * and a host must keep all three:
  *
  *   - Do not write menu.page_size between get_context and free_context. The
- *     array is released by that field, so changing it turns the release into an
- *     out-of-bounds delete.
+ *     array is released by that field, so raising it makes the release run past
+ *     the allocation, and lowering it leaks the tail.
  *   - Do not call get_context twice on the same struct; the second call drops
- *     the first allocation.
+ *     the first allocation (leaks it).
  *   - Do not walk the array looking for a NULL terminator - there is none, and
  *     the walk reads past the allocation. Read exactly menu.page_size entries.
  *
