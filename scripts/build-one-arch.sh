@@ -745,7 +745,7 @@ for vcpkg_lib_dir in "${static_build_dir}/vcpkg_installed/${triplet}/lib" "${vcp
 done
 
 # Fatal rather than a warning. A librime.a without its dependencies is missing
-# every third-party symbol it needs - leveldb, yaml-cpp, glog, opencc - and it
+# every third-party symbol it needs - leveldb, yaml-cpp, spdlog, opencc - and it
 # still passes verify_merged_plugins, packaging and the release, because those
 # check for plugin module symbols. The only thing that would notice is a consumer's
 # link step, long after the artifact shipped.

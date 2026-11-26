@@ -10,8 +10,9 @@
 
 #include <rime_varpage_api.h>
 
-// LOG comes from here, routed to glog by RIME_ENABLE_LOGGING; including glog
-// directly would break a build that has logging compiled out.
+// LOG comes from here, routed to the logging backend by RIME_ENABLE_LOGGING;
+// including a backend header directly would break a build that has logging
+// compiled out.
 #include <rime/common.h>
 #include <rime/component.h>
 #include <rime/registry.h>

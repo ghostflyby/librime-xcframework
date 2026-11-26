@@ -5,13 +5,16 @@
 // Module registration and the C API the host reaches through
 // rime->find_module("logsink")->get_api().
 //
-#include <glog/logging.h>
-
 #include <mutex>
+#include <optional>
 
+#include <rime/build_config.h>
 #include <rime_logsink_api.h>
 
 #include <rime/common.h>
+#ifdef RIME_ENABLE_LOGGING
+#include <rime/logging.h>
+#endif
 #include <rime/setup.h>  // for rime::LoadModules in RIME_REGISTER_MODULE_GROUP
 
 #include "log_sink.h"
@@ -21,40 +24,56 @@ using namespace rime;
 namespace {
 
 bool rime_logsink_add_sink(void* context, rime_logsink_callback callback) {
-  return LogSink::Instance().Add(context, callback);
+#ifdef RIME_ENABLE_LOGGING
+  return LogSinkFanout::Instance().Add(context, callback);
+#else
+  // The module still registers so its API exists, but a build without logging
+  // has no backend to attach a sink to.
+  (void)context;
+  (void)callback;
+  return false;
+#endif
 }
 
 bool rime_logsink_remove_sink(void* context) {
-  return LogSink::Instance().Remove(context);
+#ifdef RIME_ENABLE_LOGGING
+  return LogSinkFanout::Instance().Remove(context);
+#else
+  (void)context;
+  return false;
+#endif
 }
 
 bool rime_logsink_set_stderr_threshold(rime_logsink_threshold threshold) {
-  // glog's threshold is a plain int global, and it has no "off" state: a value
-  // above FATAL is what silences it, because the comparison is
-  // `severity >= threshold`. Translate our enum here so callers never deal in
-  // out-of-range values.
-  int glog_threshold;
+#ifdef RIME_ENABLE_LOGGING
+  // The backend's threshold type has no "off" state: no severity value silences
+  // stderr, so SILENT is represented by an empty optional. Translate here so
+  // callers never deal in out-of-range values.
+  std::optional<LogSeverity> level;
   switch (threshold) {
     case RIME_LOGSINK_SILENT:
-      glog_threshold = google::NUM_SEVERITIES;  // above FATAL
+      level = std::nullopt;
       break;
     case RIME_LOGSINK_AT_INFO:
-      glog_threshold = google::GLOG_INFO;
+      level = LogSeverity::Info;
       break;
     case RIME_LOGSINK_AT_WARNING:
-      glog_threshold = google::GLOG_WARNING;
+      level = LogSeverity::Warning;
       break;
     case RIME_LOGSINK_AT_ERROR:
-      glog_threshold = google::GLOG_ERROR;
+      level = LogSeverity::Error;
       break;
     case RIME_LOGSINK_AT_FATAL:
-      glog_threshold = google::GLOG_FATAL;
+      level = LogSeverity::Fatal;
       break;
     default:
       return false;
   }
-  google::SetStderrLogging(static_cast<google::LogSeverity>(glog_threshold));
-  return true;
+  return SetStderrLogSeverityThreshold(level);
+#else
+  (void)threshold;
+  return false;
+#endif
 }
 
 RimeLogSinkApi* rime_logsink_get_api() {

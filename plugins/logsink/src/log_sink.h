@@ -5,28 +5,44 @@
 #ifndef RIME_LOGSINK_LOG_SINK_H_
 #define RIME_LOGSINK_LOG_SINK_H_
 
-#include <memory>
+#include <map>
+#include <shared_mutex>
 
+#include <rime/build_config.h>
 #include <rime_logsink_api.h>
+
+#ifdef RIME_ENABLE_LOGGING
+#include <rime/logging.h>
+#endif
 
 namespace rime {
 
-// Owns the single glog sink that fans records out to registered callbacks.
-// Process-wide, like glog itself.
-class LogSink {
+#ifdef RIME_ENABLE_LOGGING
+
+// The single sink registered with librime's logging backend, fanning records
+// out to the callbacks hosts register through the C API. Process-wide.
+class LogSinkFanout : public LogSink {
  public:
-  static LogSink& Instance();
+  static LogSinkFanout& Instance();
 
   bool Add(void* context, rime_logsink_callback callback);
   bool Remove(void* context);
 
- private:
-  LogSink();
-  ~LogSink();
+  // LogSink:
+  void Send(LogSeverity severity,
+            const char* file,
+            int line,
+            const std::string& message) override;
 
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+ private:
+  LogSinkFanout();
+  ~LogSinkFanout() override;
+
+  std::shared_mutex mutex_;
+  std::map<void*, rime_logsink_callback> callbacks_;
 };
+
+#endif  // RIME_ENABLE_LOGGING
 
 }  // namespace rime
 

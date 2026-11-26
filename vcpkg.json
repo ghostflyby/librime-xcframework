@@ -9,12 +9,11 @@
     }
   ],
   "dependencies": [
-    "gflags",
-    "glog",
     "yaml-cpp",
     "leveldb",
     "lua",
     "opencc",
+    "spdlog",
     "marisa-trie",
     "boost-algorithm",
     "boost-crc",
