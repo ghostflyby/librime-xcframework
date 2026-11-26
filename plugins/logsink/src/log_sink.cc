@@ -11,6 +11,8 @@
 //
 #include "log_sink.h"
 
+#include <rime/build_config.h>
+
 #include <chrono>
 #include <ctime>
 
@@ -54,11 +56,18 @@ LogSinkFanout& LogSinkFanout::Instance() {
 }
 
 LogSinkFanout::LogSinkFanout() {
+  // The hook symbols exist only when logging is compiled in. A tree built with
+  // ENABLE_LOGGING=OFF still gets the module and its callback map, but there is
+  // no backend to attach to.
+#ifdef RIME_ENABLE_LOGGING
   AddLogSink(this);
+#endif
 }
 
 LogSinkFanout::~LogSinkFanout() {
+#ifdef RIME_ENABLE_LOGGING
   RemoveLogSink(this);
+#endif
 }
 
 bool LogSinkFanout::Add(void* context, rime_logsink_callback callback) {

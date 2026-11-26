@@ -10,6 +10,7 @@
 
 #include <rime_logsink_api.h>
 
+#include <rime/build_config.h>
 #include <rime/common.h>
 #include <rime/logging.h>
 #include <rime/setup.h>  // for rime::LoadModules in RIME_REGISTER_MODULE_GROUP
@@ -21,17 +22,31 @@ using namespace rime;
 namespace {
 
 bool rime_logsink_add_sink(void* context, rime_logsink_callback callback) {
+#ifdef RIME_ENABLE_LOGGING
   return LogSinkFanout::Instance().Add(context, callback);
+#else
+  // The module still registers so its API exists, but a build without logging
+  // has no backend to attach a sink to.
+  (void)context;
+  (void)callback;
+  return false;
+#endif
 }
 
 bool rime_logsink_remove_sink(void* context) {
+#ifdef RIME_ENABLE_LOGGING
   return LogSinkFanout::Instance().Remove(context);
+#else
+  (void)context;
+  return false;
+#endif
 }
 
 bool rime_logsink_set_stderr_threshold(rime_logsink_threshold threshold) {
-  // The backend's threshold type has no "off" state: no value silences stderr,
-  // so SILENT is represented by an empty optional. Translate here so callers
-  // never deal in out-of-range values.
+#ifdef RIME_ENABLE_LOGGING
+  // The backend's threshold type has no "off" state: no severity value silences
+  // stderr, so SILENT is represented by an empty optional. Translate here so
+  // callers never deal in out-of-range values.
   std::optional<LogSeverity> level;
   switch (threshold) {
     case RIME_LOGSINK_SILENT:
@@ -53,6 +68,10 @@ bool rime_logsink_set_stderr_threshold(rime_logsink_threshold threshold) {
       return false;
   }
   return SetStderrLogSeverityThreshold(level);
+#else
+  (void)threshold;
+  return false;
+#endif
 }
 
 RimeLogSinkApi* rime_logsink_get_api() {

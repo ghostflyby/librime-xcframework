@@ -22,6 +22,7 @@
         "BUILD_TOOLS": "OFF",
         "BUILD_SAMPLE": "OFF",
         "ENABLE_EXTERNAL_PLUGINS": "OFF",
+        "ENABLE_LOGGING": "ON",
         "BUILD_TEST": "OFF",
         "BUILD_TESTING": "OFF"
       }

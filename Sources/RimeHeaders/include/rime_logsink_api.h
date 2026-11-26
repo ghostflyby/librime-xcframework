@@ -15,6 +15,7 @@
  *
  * Taking over completely (all verified against the shipped artifacts):
  *
+ *   traits.app_name      = "my-app";  // required: setup() skips logging without it
  *   traits.modules       = the modules to load, including "logsink";
  *   traits.log_dir       = "";   // librime's own switch: never write files
  *   traits.min_log_level = 0;    // filtering here also drops records from
@@ -40,7 +41,9 @@
  *    module constructors only register and do not log.)
  *
  *  - `traits.log_dir = ""` stops file logging, so stderr becomes the primary
- *    output and carries every record `min_log_level` admits. Call
+ *    output and carries every record `min_log_level` admits. Logging only
+ *    starts when `traits.app_name` is set; without it setup() skips logging
+ *    and neither min_log_level nor set_stderr_threshold applies. Call
  *    set_stderr_threshold AFTER setup(), when the logger exists. Note also that
  *    logging initialization is one-way in librime - neither re-running setup()
  *    nor pointing log_dir somewhere else brings file logging back - which is
@@ -192,8 +195,9 @@ typedef struct rime_logsink_api_t {
   // too, where librime's stderr copy of every message would otherwise be
   // recorded twice.
   //
-  // Call this after rime->setup(), when the logger exists; before that there is
-  // nothing to configure and the call returns false.
+  // Call this after rime->setup() with `traits.app_name` set, when the logger
+  // exists; before that there is nothing to configure and the call returns
+  // false.
   bool (*set_stderr_threshold)(rime_logsink_threshold threshold);
 } RimeLogSinkApi;
 

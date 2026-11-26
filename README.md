@@ -289,6 +289,7 @@ capture the component-registration logging that `setup()` and `initialize()`
 produce:
 
 ```c
+traits.app_name      = "my-app";  // required: setup() skips logging without it
 traits.log_dir       = "";   // librime's own switch: never write log files
 traits.min_log_level = 0;    // filtering here would also drop records from sinks
 rime->setup(&traits);
@@ -309,11 +310,13 @@ sink. Behaviour worth knowing:
   somewhere else brings file logging back, so this API offers no counterpart
   that would only pretend to.
 - **`log_dir = ""` makes stderr the primary output**, carrying every record
-  `min_log_level` admits; configure `set_stderr_threshold` *after* `setup()`,
-  when the logger exists. `SILENT` suppresses stderr entirely, fatal messages
-  included. The threshold configures librime's logger only — it does not affect
-  the host's own logging — and it is how you avoid duplicate records when your
-  log system also collects stderr.
+  `min_log_level` admits. Logging itself only starts when `traits.app_name` is
+  set: without it `setup()` skips logging entirely, so neither `min_log_level`
+  nor `set_stderr_threshold` applies. Configure the threshold *after*
+  `setup()`, when the logger exists. `SILENT` suppresses stderr entirely, fatal
+  messages included. The threshold configures librime's logger only — it does
+  not affect the host's own logging — and it is how you avoid duplicate records
+  when your log system also collects stderr.
 - Severity and threshold are separate enums: a record has a severity, an output
   has a threshold, and only the threshold can be `SILENT`. Swift sees both with
   their own case names — `RimeLogSinkSeverity.error`, `RimeLogSinkThreshold.error`
@@ -448,10 +451,10 @@ Two upstream behaviors matter for this arrangement:
 
 - Static linking needs help. Module registration happens in static
   initializers, and a static linker drops those object files unless something
-  references them. `patches/0001-static-plugin-module-references.patch` brings
-  in upstream's fix for exactly this (upstream commit `cbf363be`, which landed
-  after the `1.17.0` tag), so plugin modules are force-referenced by
-  `rime_declare_module_dependencies()`.
+  references them. Upstream 1.18.0 carries the force-reference mechanism itself
+  (commit `cbf363be`): `rime_declare_module_dependencies()` references every
+  merged module through `RIME_EXTRA_MODULES`, so this repository no longer
+  patches it.
 - Plugin upgrades change candidate behavior, and `librime-octagram` was
   distributed under GPLv3 until it was relicensed to BSD 3-Clause in July 2026.
   Pins are therefore explicit, Dependabot proposals are reviewed rather than
