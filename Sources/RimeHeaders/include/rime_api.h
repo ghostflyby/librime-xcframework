@@ -66,9 +66,15 @@ typedef uintptr_t RimeSessionId;
   memset((char*)&(var) + sizeof((var).data_size), 0, (var).data_size)
 
 //! Define a variable of Type
+#ifdef __cplusplus
+#define RIME_STRUCT(Type, var) \
+  Type var = {};               \
+  RIME_STRUCT_INIT(Type, var);
+#else
 #define RIME_STRUCT(Type, var) \
   Type var = {0};              \
   RIME_STRUCT_INIT(Type, var);
+#endif
 
 // tests that member is a non-null pointer in self-versioned struct *p.
 #define RIME_PROVIDED(p, member) \
@@ -101,12 +107,10 @@ typedef struct rime_traits_t {
   const char** modules;
   // v1.6
   /*! Minimal level of logged messages.
-   *  Value is passed to Glog library using FLAGS_minloglevel variable.
    *  0 = INFO (default), 1 = WARNING, 2 = ERROR, 3 = FATAL
    */
   int min_log_level;
   /*! Directory of log files.
-   *  Value is passed to Glog library using FLAGS_log_dir variable.
    *  NULL means temporary directory, and "" means only writing to stderr.
    */
   const char* log_dir;
@@ -161,6 +165,16 @@ typedef struct RIME_FLAVORED(rime_context_t) {
   char* commit_text_preview;
   char** select_labels;
 } RIME_FLAVORED(RimeContext);
+
+/*!
+ *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
+ */
+typedef struct rime_candidate_preview_t {
+  int data_size;
+  char* text_before_selection;
+  char* selected_text;
+  char* text_after_selection;
+} RimeCandidatePreview;
 
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
@@ -505,6 +519,12 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                                               size_t index);
 
   Bool (*change_page)(RimeSessionId session_id, Bool backward);
+
+  //! get the preview of committing the highlighted candidate
+  Bool (*get_candidate_preview)(RimeSessionId session_id,
+                                RimeCandidatePreview* preview);
+  //! free a RimeCandidatePreview filled by get_candidate_preview
+  Bool (*free_candidate_preview)(RimeCandidatePreview* preview);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry
@@ -541,7 +561,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)(void);
 #define RIME_REGISTER_MODULE(name)                       \
   void rime_require_module_##name() {}                   \
   RIME_MODULE_INITIALIZER(rime_register_module_##name) { \
-    static RimeModule module = {0};                      \
+    static RimeModule module;                            \
     if (!module.data_size) {                             \
       RIME_STRUCT_INIT(RimeModule, module);              \
       module.module_name = #name;                        \
@@ -558,7 +578,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)(void);
   void rime_require_module_##name() {}                          \
   static void rime_customize_module_##name(RimeModule* module); \
   RIME_MODULE_INITIALIZER(rime_register_module_##name) {        \
-    static RimeModule module = {0};                             \
+    static RimeModule module;                                   \
     if (!module.data_size) {                                    \
       RIME_STRUCT_INIT(RimeModule, module);                     \
       module.module_name = #name;                               \
