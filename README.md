@@ -262,11 +262,11 @@ and version pinning stay with the other dependencies.
 
 ### Logging: the `logsink` plugin
 
-librime logs through an spdlog-backed facade that stays private to the library,
-so a host cannot register a sink itself when it links `RimeDynamic`. The
-`logsink` plugin is compiled into librime for exactly that reason, and exposes a
-plain C callback instead (`rime_logsink_api.h`, shipped with the other public
-headers):
+librime logs through an spdlog-backed facade whose header is internal and not
+installed, so a host has no supported way to register a sink itself when it
+links `RimeDynamic`. The `logsink` plugin is compiled into librime for exactly
+that reason, and exposes a plain C callback instead (`rime_logsink_api.h`,
+shipped with the other public headers):
 
 ```c
 #include <rime_api.h>
@@ -311,12 +311,12 @@ sink. Behaviour worth knowing:
   that would only pretend to.
 - **`log_dir = ""` makes stderr the primary output**, carrying every record
   `min_log_level` admits. Logging itself only starts when `traits.app_name` is
-  set: without it `setup()` skips logging entirely, so neither `min_log_level`
-  nor `set_stderr_threshold` applies. Configure the threshold *after*
-  `setup()`, when the logger exists. `SILENT` suppresses stderr entirely, fatal
-  messages included. The threshold configures librime's logger only — it does
-  not affect the host's own logging — and it is how you avoid duplicate records
-  when your log system also collects stderr.
+  set; without it no logger exists, every record still goes to the backend's
+  stderr fallback, and `set_stderr_threshold` cannot affect it. Configure the
+  threshold *after* `setup()`, when the logger exists. `SILENT` suppresses
+  stderr entirely, fatal messages included. The threshold configures librime's
+  logger only — it does not affect the host's own logging — and it is how you
+  avoid duplicate records when your log system also collects stderr.
 - Severity and threshold are separate enums: a record has a severity, an output
   has a threshold, and only the threshold can be `SILENT`. Swift sees both with
   their own case names — `RimeLogSinkSeverity.error`, `RimeLogSinkThreshold.error`
@@ -324,9 +324,11 @@ sink. Behaviour worth knowing:
   `RIME_LOGSINK_ERROR` / `RIME_LOGSINK_AT_ERROR` identifiers, where the `AT_`
   prefix is required by C's single namespace and reads as "at this level and
   above".
-- The callback runs on the logging thread while the backend holds a lock, may be
-  called concurrently from several threads, and must return promptly. Do not
-  call back into librime logging from it (that deadlocks).
+- The callback runs synchronously on the logging thread, and deliveries are
+  serialized by the backend's lock, so callbacks do not overlap. It must return
+  promptly, and it must not call back into librime logging or the sink API
+  (`LOG`, `add_sink`, `remove_sink`, `set_stderr_threshold`, the logging
+  queries): they take the same non-recursive lock and deadlock.
 - Records can contain user input (typed keys, dictionary entries). Redaction and
   retention are the callback's responsibility, not this module's.
 

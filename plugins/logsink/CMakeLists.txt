@@ -5,8 +5,8 @@
 # directory defines plugin_name, plugin_objs, plugin_deps and plugin_modules for
 # the parent plugins/CMakeLists.txt. With BUILD_MERGED_PLUGINS=ON the objects are
 # merged into librime itself, which is what lets the sink reach librime's
-# logging backend: its logging header is private to the library, so only code
-# compiled into the library can register a sink.
+# logging backend: its logging header is not installed, so the sink has to be
+# compiled into the library.
 project(rime-logsink)
 cmake_minimum_required(VERSION 3.10)
 

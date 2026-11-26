@@ -122,7 +122,7 @@ diff --git a/src/rime/logging.cc b/src/rime/logging.cc
 +}
 +
  void LogMessageToSink(LogSeverity severity,
-@@ -430,20 +466,32 @@ void LogMessageToSink(LogSeverity severity,
+@@ -430,21 +466,33 @@ void LogMessageToSink(LogSeverity severity,
    const char* source_file = file != nullptr ? file : "";
 +  const auto level = ToSpdlogLevel(severity);
 +  const bool deliver_to_sinks = !logger || logger->should_log(level);

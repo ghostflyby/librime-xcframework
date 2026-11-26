@@ -8,11 +8,13 @@
 #include <mutex>
 #include <optional>
 
+#include <rime/build_config.h>
 #include <rime_logsink_api.h>
 
-#include <rime/build_config.h>
 #include <rime/common.h>
+#ifdef RIME_ENABLE_LOGGING
 #include <rime/logging.h>
+#endif
 #include <rime/setup.h>  // for rime::LoadModules in RIME_REGISTER_MODULE_GROUP
 
 #include "log_sink.h"

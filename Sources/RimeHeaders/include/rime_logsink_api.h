@@ -42,12 +42,13 @@
  *
  *  - `traits.log_dir = ""` stops file logging, so stderr becomes the primary
  *    output and carries every record `min_log_level` admits. Logging only
- *    starts when `traits.app_name` is set; without it setup() skips logging
- *    and neither min_log_level nor set_stderr_threshold applies. Call
- *    set_stderr_threshold AFTER setup(), when the logger exists. Note also that
- *    logging initialization is one-way in librime - neither re-running setup()
- *    nor pointing log_dir somewhere else brings file logging back - which is
- *    why this API offers no counterpart.
+ *    starts when `traits.app_name` is set; without it no logger exists, every
+ *    record still goes to the backend's stderr fallback, and
+ *    set_stderr_threshold cannot affect it. Call set_stderr_threshold AFTER
+ *    setup(), when the logger exists. Note also that logging initialization is
+ *    one-way in librime - neither re-running setup() nor pointing log_dir
+ *    somewhere else brings file logging back - which is why this API offers no
+ *    counterpart.
  *
  *  - SILENT is not "severity zero". Thresholds live in a separate enum whose
  *    values are deliberately offset from the severity values, because a
@@ -159,14 +160,14 @@ typedef struct rime_logsink_record {
 
 // Invoked for every record, in the context of the logging call.
 //
-// Thread-safety: callbacks run on whichever thread executed the log statement,
-// and may run concurrently on several threads, so a callback must synchronize
-// its own state. It must also not call back into librime's logging (a
-// synchronous LOG() would re-enter the logging lock and deadlock), nor call
-// set_stderr_threshold, which takes that same lock. Keep it short: the backend
-// holds a lock for the duration of every callback, so slow work delays the
-// logging thread and other outputs; hand anything non-trivial to your own
-// queue.
+// Thread-safety: callbacks run synchronously on whichever thread executed the
+// log statement, and the backend's lock serializes them, so they do not
+// overlap. A callback must not call back into librime's logging or sink API
+// (LOG(), add_sink/remove_sink, set_stderr_threshold, IsLoggingInitialized,
+// IsLogToStderr, GetLoggingDirectories): they take the same non-recursive lock
+// and deadlock. Keep it short: the backend holds a lock for the duration of
+// every callback, so slow work delays the logging thread and other outputs;
+// hand anything non-trivial to your own queue.
 typedef void (*rime_logsink_callback)(void* context,
                                       const rime_logsink_record* record);
 

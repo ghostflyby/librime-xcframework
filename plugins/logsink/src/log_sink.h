@@ -8,10 +8,16 @@
 #include <map>
 #include <shared_mutex>
 
-#include <rime/logging.h>
+#include <rime/build_config.h>
 #include <rime_logsink_api.h>
 
+#ifdef RIME_ENABLE_LOGGING
+#include <rime/logging.h>
+#endif
+
 namespace rime {
+
+#ifdef RIME_ENABLE_LOGGING
 
 // The single sink registered with librime's logging backend, fanning records
 // out to the callbacks hosts register through the C API. Process-wide.
@@ -35,6 +41,8 @@ class LogSinkFanout : public LogSink {
   std::shared_mutex mutex_;
   std::map<void*, rime_logsink_callback> callbacks_;
 };
+
+#endif  // RIME_ENABLE_LOGGING
 
 }  // namespace rime
 

@@ -1,7 +1,7 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -83,8 +83,18 @@ find_package(Threads)
+@@ -84,7 +84,21 @@ find_package(Threads)
  
  if(ENABLE_LOGGING)
 -  # Always use the bundled, pinned spdlog so that the library is linked
@@ -17,6 +17,10 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +        "spdlog was found outside vcpkg: ${spdlog_DIR}. "
 +        "This packaging build requires the vcpkg port.")
 +    endif()
++  endif()
++  if(DEFINED VCPKG_INSTALLED_DIR AND NOT TARGET spdlog::spdlog)
++    message(FATAL_ERROR
++      "vcpkg did not provide spdlog; add it to the manifest.")
 +  endif()
    if(NOT TARGET spdlog::spdlog)
      if(NOT EXISTS "${PROJECT_SOURCE_DIR}/deps/spdlog/CMakeLists.txt")

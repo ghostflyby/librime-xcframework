@@ -6,12 +6,15 @@
 // backend, fanning records out to the registered C callbacks. It owns no
 // destination of its own - deciding where records go is the host's business.
 //
-// It must be compiled into librime (a merged plugin): the logging header is
-// internal to the library, so only code compiled into it can register a sink.
+// It must be compiled into librime (a merged plugin): the logging header is not
+// installed, so the plugin has to live inside the library to reach it.
 //
 #include "log_sink.h"
 
-#include <rime/build_config.h>
+// The hook exists only when logging is compiled in. A tree built with
+// ENABLE_LOGGING=OFF still gets the module and its C API, but this translation
+// unit is empty and the API's add/threshold calls report false.
+#ifdef RIME_ENABLE_LOGGING
 
 #include <chrono>
 #include <ctime>
@@ -56,18 +59,11 @@ LogSinkFanout& LogSinkFanout::Instance() {
 }
 
 LogSinkFanout::LogSinkFanout() {
-  // The hook symbols exist only when logging is compiled in. A tree built with
-  // ENABLE_LOGGING=OFF still gets the module and its callback map, but there is
-  // no backend to attach to.
-#ifdef RIME_ENABLE_LOGGING
   AddLogSink(this);
-#endif
 }
 
 LogSinkFanout::~LogSinkFanout() {
-#ifdef RIME_ENABLE_LOGGING
   RemoveLogSink(this);
-#endif
 }
 
 bool LogSinkFanout::Add(void* context, rime_logsink_callback callback) {
@@ -103,10 +99,10 @@ void LogSinkFanout::Send(LogSeverity severity,
   record.unix_time_millis = UnixTimeMillis();
   record.utc_offset_seconds = UtcOffsetSeconds(now);
 
-  // Held across delivery (shared, so concurrent logging threads still run in
-  // parallel) so that Remove is a lifetime barrier: once it returns, no
-  // callback for that context is in flight. The backend holds its own lock
-  // across Send for the same reason.
+  // Held across delivery so that Remove is a lifetime barrier: once it returns,
+  // no callback for that context is in flight. The backend serializes Send
+  // calls, so the shared lock here mostly serves host threads adding or
+  // removing a sink while a delivery is running.
   std::shared_lock<std::shared_mutex> lock(mutex_);
   for (const auto& entry : callbacks_) {
     entry.second(entry.first, &record);
@@ -114,3 +110,5 @@ void LogSinkFanout::Send(LogSeverity severity,
 }
 
 }  // namespace rime
+
+#endif  // RIME_ENABLE_LOGGING
