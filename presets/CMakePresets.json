@@ -17,7 +17,6 @@
         "VCPKG_MANIFEST_DIR": "$env{WRAPPER_ROOT}",
         "VCPKG_INSTALL_OPTIONS": "--allow-unsupported",
         "BUILD_STATIC": "ON",
-        "WITH_STATIC_DEPS": "ON",
         "BUILD_MERGED_PLUGINS": "ON",
         "BUILD_SEPARATE_LIBS": "OFF",
         "BUILD_TOOLS": "OFF",

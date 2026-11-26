@@ -262,11 +262,11 @@ and version pinning stay with the other dependencies.
 
 ### Logging: the `logsink` plugin
 
-librime logs through glog, whose symbols stay hidden inside the dynamic
-framework — so a host cannot register a glog sink itself when it links
-`RimeDynamic`. The `logsink` plugin is compiled into librime for exactly that
-reason, and exposes a plain C callback instead (`rime_logsink_api.h`, shipped
-with the other public headers):
+librime logs through an spdlog-backed facade that stays private to the library,
+so a host cannot register a sink itself when it links `RimeDynamic`. The
+`logsink` plugin is compiled into librime for exactly that reason, and exposes a
+plain C callback instead (`rime_logsink_api.h`, shipped with the other public
+headers):
 
 ```c
 #include <rime_api.h>
@@ -300,20 +300,20 @@ rime->initialize(&traits);
 That combination yields no files, no stderr output, and every record in the
 sink. Behaviour worth knowing:
 
-- **Sinks are additive.** glog dispatches to every registered sink, so adding one
-  does not replace another. Nothing is registered by default, and a host that
-  does not ask for a sink sees unchanged logging.
+- **Sinks are additive.** The backend dispatches to every registered sink, so
+  adding one does not replace another. Nothing is registered by default, and a
+  host that does not ask for a sink sees unchanged logging.
 - **File logging is controlled by librime, not by this API.** `traits.log_dir =
   ""` stops it, which is why there is no `disable_file_logging` here. It is
-  one-way at the glog level: neither re-running `setup()` nor pointing
-  `log_dir` somewhere else brings file logging back, so this API offers no
-  counterpart that would only pretend to.
-- **`log_dir = ""` also raises glog's stderr threshold to INFO** as a side
-  effect, so set `set_stderr_threshold` *after* `setup()` or it gets
-  overwritten. `SILENT` suppresses stderr entirely, fatal messages included.
-  The threshold is process-wide because glog's is, so it affects the host's own
-  glog usage too — and it is how you avoid duplicate records when your log
-  system also collects stderr.
+  one-way in librime: neither re-running `setup()` nor pointing `log_dir`
+  somewhere else brings file logging back, so this API offers no counterpart
+  that would only pretend to.
+- **`log_dir = ""` makes stderr the primary output**, carrying every record
+  `min_log_level` admits; configure `set_stderr_threshold` *after* `setup()`,
+  when the logger exists. `SILENT` suppresses stderr entirely, fatal messages
+  included. The threshold configures librime's logger only — it does not affect
+  the host's own logging — and it is how you avoid duplicate records when your
+  log system also collects stderr.
 - Severity and threshold are separate enums: a record has a severity, an output
   has a threshold, and only the threshold can be `SILENT`. Swift sees both with
   their own case names — `RimeLogSinkSeverity.error`, `RimeLogSinkThreshold.error`
@@ -321,9 +321,9 @@ sink. Behaviour worth knowing:
   `RIME_LOGSINK_ERROR` / `RIME_LOGSINK_AT_ERROR` identifiers, where the `AT_`
   prefix is required by C's single namespace and reads as "at this level and
   above".
-- The callback runs on the logging thread while glog holds a lock, may be called
-  concurrently from several threads, and must return promptly. Do not call back
-  into librime logging from it (that deadlocks).
+- The callback runs on the logging thread while the backend holds a lock, may be
+  called concurrently from several threads, and must return promptly. Do not
+  call back into librime logging from it (that deadlocks).
 - Records can contain user input (typed keys, dictionary entries). Redaction and
   retention are the callback's responsibility, not this module's.
 

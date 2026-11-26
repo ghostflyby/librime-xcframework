@@ -1,0 +1,15 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -83,8 +83,10 @@ find_package(Threads)
+ 
+ if(ENABLE_LOGGING)
+-  # Always use the bundled, pinned spdlog so that the library is linked
+-  # statically and no new runtime dependency is introduced.
++  # Prefer an spdlog supplied by the build system (vcpkg in this packaging
++  # build); fall back to the bundled, pinned submodule, which keeps the library
++  # statically linked and introduces no new runtime dependency.
++  find_package(spdlog CONFIG QUIET)
+   if(NOT TARGET spdlog::spdlog)
+     if(NOT EXISTS "${PROJECT_SOURCE_DIR}/deps/spdlog/CMakeLists.txt")
+       message(FATAL_ERROR

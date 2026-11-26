@@ -1,0 +1,159 @@
+diff --git a/src/rime/logging.h b/src/rime/logging.h
+--- a/src/rime/logging.h
++++ b/src/rime/logging.h
+@@ -10,6 +10,7 @@
+ #include <atomic>
+ #include <cctype>
+ #include <cstring>
++#include <optional>
+ #include <ostream>
+ #include <sstream>
+ #include <string>
+@@ -42,6 +43,37 @@ namespace rime {
+ 
+ enum class LogSeverity { Info, Warning, Error, Fatal };
+ 
++// A sink for records this module emits, so an embedder can capture librime's
++// diagnostics in-process.  Sinks are additive: every registered sink receives
++// every record that passes `min_log_level`, independently of the stderr
++// threshold, and the built-in file/stderr output keeps working alongside them.
++class RIME_DLL LogSink {
++ public:
++  virtual ~LogSink() = default;
++
++  // `file` is the source path as written at the logging call site, `line` is
++  // the call site's line, and `message` is the formatted text without a
++  // trailing newline.  Called synchronously on the logging thread; an
++  // implementation must not log and must return promptly.
++  virtual void Send(LogSeverity severity,
++                    const char* file,
++                    int line,
++                    const std::string& message) = 0;
++};
++
++// Registers `sink` for every record this module emits.  Registration is
++// idempotent, and sinks survive InitializeLogging/ShutdownLogging.  Removing a
++// sink returns only after any delivery already in flight has finished, so the
++// caller may destroy it afterwards.
++RIME_DLL void AddLogSink(LogSink* sink);
++RIME_DLL void RemoveLogSink(LogSink* sink);
++
++// Sets the lowest severity mirrored to stderr, or silences that output when
++// `threshold` is empty.  Returns false when logging is not initialized and
++// there is no stderr output to configure.
++RIME_DLL bool SetStderrLogSeverityThreshold(
++    std::optional<LogSeverity> threshold);
++
+ // A log message is assembled with operator<< and written to the logging
+ // backend in the destructor, so that LOG(INFO) << ... stays source-compatible
+ // with glog.
+diff --git a/src/rime/logging.cc b/src/rime/logging.cc
+--- a/src/rime/logging.cc
++++ b/src/rime/logging.cc
+@@ -51,8 +51,18 @@
+ std::mutex g_mutex;
+ std::shared_ptr<spdlog::logger> g_logger;
+ bool g_initialized = false;
+ bool g_log_to_stderr = true;
+ std::vector<std::string> g_logging_directories;
+ std::atomic<int> g_vlog_level{0};
+ 
++std::shared_ptr<spdlog::sinks::stderr_color_sink_mt> g_stderr_sink;
++
++// Function-local rather than namespace-scope: a merged plugin registers its
++// sink from a static constructor, and those run in an order this translation
++// unit does not control.
++std::vector<LogSink*>& Sinks() {
++  static auto* sinks = new std::vector<LogSink*>();
++  return *sinks;
++}
++
+ spdlog::level::level_enum ToSpdlogLevel(LogSeverity severity) {
+@@ -312,10 +322,11 @@
+ #ifndef __ANDROID__
+   // glog mirrored ERROR and FATAL messages to stderr by default
+   // (--stderrthreshold=ERROR) even when a log file was in use.  Keep that
+   // behavior unless all messages already go to stderr.
+   auto stderr_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+   if (file_logging && !kAlsoLogToStderr) {
+     stderr_sink->set_level(spdlog::level::err);
+   }
+   sinks.push_back(stderr_sink);
++  g_stderr_sink = stderr_sink;
+ #else
+@@ -376,9 +387,10 @@ void ShutdownLogging() {
+   std::shared_ptr<spdlog::logger> logger;
+   {
+     std::lock_guard<std::mutex> lock(g_mutex);
+     logger = g_logger;
+     g_logger.reset();
+     g_initialized = false;
+     g_log_to_stderr = true;
+     g_logging_directories.clear();
++    g_stderr_sink.reset();
+   }
+@@ -416,5 +428,29 @@ void SetVlogLevel(int verbose_level) {
+   g_vlog_level.store(verbose_level > 0 ? verbose_level : 0,
+                      std::memory_order_relaxed);
+ }
+ 
++void AddLogSink(LogSink* sink) {
++  if (sink == nullptr)
++    return;
++  std::lock_guard<std::mutex> lock(g_mutex);
++  auto& sinks = Sinks();
++  if (std::find(sinks.begin(), sinks.end(), sink) == sinks.end())
++    sinks.push_back(sink);
++}
++
++void RemoveLogSink(LogSink* sink) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  auto& sinks = Sinks();
++  sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
++}
++
++bool SetStderrLogSeverityThreshold(std::optional<LogSeverity> threshold) {
++  std::lock_guard<std::mutex> lock(g_mutex);
++  if (!g_stderr_sink)
++    return false;
++  g_stderr_sink->set_level(threshold ? ToSpdlogLevel(*threshold)
++                                     : spdlog::level::off);
++  return true;
++}
++
+ void LogMessageToSink(LogSeverity severity,
+@@ -430,20 +466,32 @@ void LogMessageToSink(LogSeverity severity,
+   const char* source_file = file != nullptr ? file : "";
++  const auto level = ToSpdlogLevel(severity);
++  const bool deliver_to_sinks = !logger || logger->should_log(level);
+   if (logger) {
+     try {
+       logger->log(spdlog::source_loc{source_file, line, ""},
+-                  ToSpdlogLevel(severity), message);
++                  level, message);
+       if (severity == LogSeverity::Fatal)
+         logger->flush();
+     } catch (const std::exception& ex) {
+       std::fprintf(stderr, "Rime: logging failed: %s\n", ex.what());
+     } catch (...) {
+       std::fprintf(stderr, "Rime: logging failed.\n");
+     }
+   } else {
+     std::fprintf(stderr, "%c %s:%d] %s\n", LevelChar(severity), source_file,
+                  line, message.c_str());
+     std::fflush(stderr);
+   }
+ 
++  if (deliver_to_sinks) {
++    // Held across delivery so RemoveLogSink is a lifetime barrier: when it
++    // returns, no callback on that sink is in flight.  Sinks must not log, and
++    // must return promptly.
++    std::lock_guard<std::mutex> lock(g_mutex);
++    for (LogSink* sink : Sinks()) {
++      sink->Send(severity, source_file, line, message);
++    }
++  }
++
+   if (severity == LogSeverity::Fatal)
+     std::abort();
+ }

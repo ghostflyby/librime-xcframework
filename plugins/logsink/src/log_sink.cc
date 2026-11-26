@@ -2,106 +2,106 @@
 // Copyright (c) 2026, librime-xcframework contributors
 // Distributed under the BSD 3-Clause License; see LICENSE.
 //
-// The sink itself: a glog LogSink that fans records out to the registered C
-// callbacks. It owns no destination of its own - deciding where records go is
-// the host's business.
+// The sink itself: the LogSink this module registers with librime's logging
+// backend, fanning records out to the registered C callbacks. It owns no
+// destination of its own - deciding where records go is the host's business.
 //
-// It must be compiled into librime (a merged plugin). glog sets
-// CMAKE_CXX_VISIBILITY_PRESET hidden and GLOG_EXPORT expands empty outside DLL
-// builds, so AddLogSink is a local symbol in the dynamic artifacts: code inside
-// the library can reach it, code outside cannot.
+// It must be compiled into librime (a merged plugin): the logging header is
+// internal to the library, so only code compiled into it can register a sink.
 //
 #include "log_sink.h"
 
-#include <glog/logging.h>
-
 #include <chrono>
-#include <map>
-#include <mutex>
-#include <shared_mutex>
+#include <ctime>
 
 namespace rime {
+namespace {
 
-class LogSink::Impl : public google::LogSink {
- public:
-  Impl() {
-    // Registered for the lifetime of the process. The LogMessageTime-based
-    // send() overload is used rather than the deprecated std::tm one: the tm in
-    // the deprecated overload is local time (or UTC under FLAGS_log_utc_time),
-    // so reconstructing an instant from it was ambiguous across DST boundaries.
-    google::AddLogSink(this);
-  }
+int64_t UnixTimeMillis() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+      .count();
+}
 
-  ~Impl() override { google::RemoveLogSink(this); }
+// Seconds east of UTC at `now`. The packaged spdlog is built with vcpkg's
+// tz-offset feature, which compiles its %z support out, so the offset comes
+// from the C library instead.
+int UtcOffsetSeconds(std::time_t now) {
+  std::tm local = {};
+  localtime_r(&now, &local);
+  return static_cast<int>(local.tm_gmtoff);
+}
 
-  bool Add(void* context, rime_logsink_callback callback) {
-    if (!callback) {
-      return false;
-    }
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    return callbacks_.emplace(context, callback).second;
-  }
-
-  bool Remove(void* context) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    return callbacks_.erase(context) > 0;
-  }
-
-  void send(google::LogSeverity severity, const char* full_filename,
-            const char* base_filename, int line,
-            const google::LogMessageTime& time, const char* message,
-            size_t message_len) override {
-    rime_logsink_record record;
-    // glog's LogSeverity and our rime_logsink_severity share the same ordering,
-    // so this maps directly. The cast is explicit because our enum is a
-    // distinct type with a pinned underlying type.
-    record.severity = static_cast<rime_logsink_severity>(severity);
-    record.message = message;
-    record.message_length = message_len;
-    record.base_filename = base_filename;
-    record.full_filename = full_filename;
-    record.line = line;
-    record.unix_time_millis = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            time.when().time_since_epoch())
-            .count());
-    record.utc_offset_seconds = static_cast<int>(time.gmtoffset().count());
-
-    // Held across delivery (shared, so concurrent logging threads still run in
-    // parallel) to match glog's own discipline: glog takes its sink lock shared
-    // across send() and exclusively for Add/RemoveLogSink, which is what makes
-    // removal a lifetime barrier. Delivering after unlocking instead would let a
-    // host free its context while a callback for it was still in flight.
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    for (const auto& entry : callbacks_) {
-      entry.second(entry.first, &record);
+const char* BaseFilename(const char* file) {
+  const char* base = file;
+  for (const char* p = file; *p != '\0'; ++p) {
+    if (*p == '/' || *p == '\\') {
+      base = p + 1;
     }
   }
+  return base;
+}
 
- private:
-  std::shared_mutex mutex_;
-  std::map<void*, rime_logsink_callback> callbacks_;
-};
+}  // namespace
 
-LogSink& LogSink::Instance() {
-  // Deliberately leaked: glog keeps a raw pointer to the sink, and glog's own
-  // statics may outlive a function-local static, so destroying this at exit
-  // would leave a dangling entry that any late LOG() (a static destructor, an
-  // atexit handler, a detached worker) would dereference.
-  static LogSink* instance = new LogSink;
+LogSinkFanout& LogSinkFanout::Instance() {
+  // Deliberately leaked: the logging backend keeps a raw pointer to the sink,
+  // and its own statics may outlive a function-local static, so destroying this
+  // at exit would leave a dangling entry that any late LOG() (a static
+  // destructor, an atexit handler, a detached worker) would dereference.
+  static LogSinkFanout* instance = new LogSinkFanout;
   return *instance;
 }
 
-bool LogSink::Add(void* context, rime_logsink_callback callback) {
-  return impl_->Add(context, callback);
+LogSinkFanout::LogSinkFanout() {
+  AddLogSink(this);
 }
 
-bool LogSink::Remove(void* context) {
-  return impl_->Remove(context);
+LogSinkFanout::~LogSinkFanout() {
+  RemoveLogSink(this);
 }
 
-LogSink::LogSink() : impl_(new Impl) {}
+bool LogSinkFanout::Add(void* context, rime_logsink_callback callback) {
+  if (!callback) {
+    return false;
+  }
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  return callbacks_.emplace(context, callback).second;
+}
 
-LogSink::~LogSink() = default;
+bool LogSinkFanout::Remove(void* context) {
+  std::unique_lock<std::shared_mutex> lock(mutex_);
+  return callbacks_.erase(context) > 0;
+}
+
+void LogSinkFanout::Send(LogSeverity severity,
+                         const char* file,
+                         int line,
+                         const std::string& message) {
+  const char* source_file = file != nullptr ? file : "";
+  rime_logsink_record record;
+  // LogSeverity and rime_logsink_severity share the same ordering, so this maps
+  // directly. The intermediate cast is explicit because both are distinct enum
+  // types.
+  record.severity = static_cast<rime_logsink_severity>(
+      static_cast<int>(severity));
+  record.message = message.data();
+  record.message_length = message.size();
+  record.base_filename = BaseFilename(source_file);
+  record.full_filename = source_file;
+  record.line = line;
+  const std::time_t now = std::time(nullptr);
+  record.unix_time_millis = UnixTimeMillis();
+  record.utc_offset_seconds = UtcOffsetSeconds(now);
+
+  // Held across delivery (shared, so concurrent logging threads still run in
+  // parallel) so that Remove is a lifetime barrier: once it returns, no
+  // callback for that context is in flight. The backend holds its own lock
+  // across Send for the same reason.
+  std::shared_lock<std::shared_mutex> lock(mutex_);
+  for (const auto& entry : callbacks_) {
+    entry.second(entry.first, &record);
+  }
+}
 
 }  // namespace rime
