@@ -2,10 +2,9 @@
 set -euo pipefail
 
 # Verifies the OpenCC data this repository commits under Sources/RimeOpenCCData,
-# without building anything - the way verify-committed-headers.sh treats the
-# headers. The manifest.json the build's collection step writes states the
-# opencc version and a sha256 per file, and this re-hashes the committed copies
-# against it.
+# without building anything. The manifest.json the build's collection step
+# writes states the opencc version and a sha256 per file, and this re-hashes the
+# committed copies against it.
 #
 # Nothing else checks that the committed data is intact: the files are binary
 # dictionaries no compiler reads, so a corrupted or hand-edited copy would ship
